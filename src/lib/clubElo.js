@@ -1,5 +1,4 @@
-
-/* Récupère l'Elo actuel d'un club via le proxy Netlify (evite les soucis CORS d'un
+/* Récupère l'Elo actuel d'un club via le proxy VERCEL (evite les soucis CORS d'un
    appel direct navigateur -> api.clubelo.com), et calcule une probabilité de match
    à partir de l'écart entre deux Elo.
 
@@ -10,7 +9,8 @@ export async function fetchClubElo(teamName) {
   const name = (teamName || "").trim();
   if (!name) return null;
   
-  const res = await fetch(`/.netlify/functions/clubelo?team=${encodeURIComponent(name)}`);
+  // CORRECTION ICI : Changement de l'adresse pour cibler l'API de Vercel
+  const res = await fetch(`/api/clubelo?team=${encodeURIComponent(name)}`);
   if (!res.ok) throw new Error("ClubElo indisponible");
   
   const text = await res.text();
