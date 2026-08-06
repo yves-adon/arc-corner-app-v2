@@ -1,6 +1,6 @@
-/* Récupère l'Elo actuel d'un club via le proxy VERCEL (evite les soucis CORS d'un
-   appel direct navigateur -> api.clubelo.com), et calcule une probabilité de match
-   à partir de l'écart entre deux Elo.
+/* Récupère l'Elo actuel d'un club via le proxy serveur /api/clubelo (Vercel — évite
+   les soucis CORS d'un appel direct navigateur -> api.clubelo.com), et calcule une
+   probabilité de match à partir de l'écart entre deux Elo.
 
    ClubElo renvoie un CSV avec l'historique complet d'Elo du club, une ligne par
    période (Rank,Club,Country,Level,Elo,From,To) — on ne garde que la DERNIÈRE ligne
@@ -8,38 +8,25 @@
 export async function fetchClubElo(teamName) {
   const name = (teamName || "").trim();
   if (!name) return null;
-  
-  // CORRECTION ICI : Changement de l'adresse pour cibler l'API de Vercel
   const res = await fetch(`/api/clubelo?team=${encodeURIComponent(name)}`);
   if (!res.ok) throw new Error("ClubElo indisponible");
-  
   const text = await res.text();
   const lines = text.trim().split("\n").filter(Boolean);
   if (lines.length < 2) return null; // juste l'en-tête ou vide = club introuvable
-  
-  // Nettoyage des en-têtes pour supprimer les espaces ou caractères invisibles
-  const header = lines[0].split(",").map((h) => h.trim().replace(/["'\r]/g, ""));
-  const lastRow = lines[lines.length - 1].split(",").map((r) => r.trim());
-  
-  const get = (col, fallbackIdx) => {
+  const header = lines[0].split(",").map((h) => h.trim());
+  const lastRow = lines[lines.length - 1].split(",");
+  const get = (col) => {
     const idx = header.indexOf(col);
-    // Si l'index dynamique échoue, on utilise l'index fixe standard du CSV de ClubElo
-    const finalIdx = idx >= 0 ? idx : fallbackIdx;
-    return lastRow[finalIdx];
+    return idx >= 0 ? lastRow[idx] : undefined;
   };
-
-  // Index standards de ClubElo : Rank=0, Club=1, Country=2, Level=3, Elo=4, From=5, To=6
-  const eloRaw = get("Elo", 4);
-  const elo = parseFloat(eloRaw);
-  
-  if (Number.isNaN(elo)) return null;
-  
+  const elo = parseFloat(get("Elo"));
+  if (!elo || Number.isNaN(elo)) return null;
   return {
-    club: get("Club", 1) || name,
-    country: get("Country", 2) || "",
+    club: get("Club") || name,
+    country: get("Country") || "",
     elo,
-    from: get("From", 5) || "",
-    to: get("To", 6) || "",
+    from: get("From") || "",
+    to: get("To") || "",
   };
 }
 
