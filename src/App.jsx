@@ -1701,6 +1701,13 @@ function EloPanel({ teamAName, teamBName }) {
               <div style={{ color: C.faint, fontSize: 10 }}>{eloB.country}</div>
             </div>
           </div>
+          {(eloA.fromCache || eloB.fromCache) && (
+            <div style={{ fontSize: 10, color: eloA.stale || eloB.stale ? C.jouable : C.faint, textAlign: "center" }}>
+              {eloA.stale || eloB.stale
+                ? "⚠️ ClubElo injoignable à l'instant — dernière donnée connue réutilisée (peut-être un peu ancienne)"
+                : "donnée en cache (moins de 12h) — pas de nouvel appel à ClubElo"}
+            </div>
+          )}
           {matchup && (
             <>
               <div style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 8, padding: 10 }}>
