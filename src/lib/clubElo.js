@@ -4,30 +4,71 @@
 
    ClubElo renvoie un CSV avec l'historique complet d'Elo du club, une ligne par
    période (Rank,Club,Country,Level,Elo,From,To) — on ne garde que la DERNIÈRE ligne
-   (période la plus récente = Elo actuel). */
+   (période la plus récente = Elo actuel).
+
+   Mise en cache locale (12h) : ClubElo ne se met à jour qu'une fois par jour, et
+   semble limiter les appels répétés (probable rate-limit sur les IP de datacenter
+   comme celles de Vercel) — pas la peine de le solliciter à chaque clic pour la même
+   équipe. Si le réseau échoue mais qu'une donnée en cache existe (même expirée), on
+   la réutilise plutôt que d'afficher une erreur pure. */
+const CLUBELO_CACHE_PREFIX = "arc_corner_clubelo_";
+const CLUBELO_CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12h
+
+function readEloCache(key) {
+  try {
+    const raw = localStorage.getItem(CLUBELO_CACHE_PREFIX + key);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+function writeEloCache(key, data) {
+  try {
+    localStorage.setItem(CLUBELO_CACHE_PREFIX + key, JSON.stringify({ ...data, cachedAt: Date.now() }));
+  } catch (e) {
+    // quota localStorage dépassé ou indisponible — sans conséquence, on continue sans cache
+  }
+}
+
 export async function fetchClubElo(teamName) {
   const name = (teamName || "").trim();
   if (!name) return null;
-  const res = await fetch(`/api/clubelo?team=${encodeURIComponent(name)}`);
-  if (!res.ok) throw new Error("ClubElo indisponible");
-  const text = await res.text();
-  const lines = text.trim().split("\n").filter(Boolean);
-  if (lines.length < 2) return null; // juste l'en-tête ou vide = club introuvable
-  const header = lines[0].split(",").map((h) => h.trim());
-  const lastRow = lines[lines.length - 1].split(",");
-  const get = (col) => {
-    const idx = header.indexOf(col);
-    return idx >= 0 ? lastRow[idx] : undefined;
-  };
-  const elo = parseFloat(get("Elo"));
-  if (!elo || Number.isNaN(elo)) return null;
-  return {
-    club: get("Club") || name,
-    country: get("Country") || "",
-    elo,
-    from: get("From") || "",
-    to: get("To") || "",
-  };
+  const cacheKey = name.toLowerCase();
+  const cached = readEloCache(cacheKey);
+  if (cached && Date.now() - cached.cachedAt < CLUBELO_CACHE_TTL_MS) {
+    return { ...cached, stale: false, fromCache: true };
+  }
+
+  try {
+    const res = await fetch(`/api/clubelo?team=${encodeURIComponent(name)}`);
+    if (!res.ok) throw new Error("ClubElo indisponible");
+    const text = await res.text();
+    const lines = text.trim().split("\n").filter(Boolean);
+    if (lines.length < 2) return null; // juste l'en-tête ou vide = club introuvable
+    const header = lines[0].split(",").map((h) => h.trim());
+    const lastRow = lines[lines.length - 1].split(",");
+    const get = (col) => {
+      const idx = header.indexOf(col);
+      return idx >= 0 ? lastRow[idx] : undefined;
+    };
+    const elo = parseFloat(get("Elo"));
+    if (!elo || Number.isNaN(elo)) return null;
+    const result = {
+      club: get("Club") || name,
+      country: get("Country") || "",
+      elo,
+      from: get("From") || "",
+      to: get("To") || "",
+    };
+    writeEloCache(cacheKey, result);
+    return { ...result, stale: false, fromCache: false };
+  } catch (e) {
+    // le réseau/proxy a échoué (souvent : ClubElo limite les appels répétés) — si on a
+    // une donnée en cache même expirée, mieux vaut la réutiliser que de ne rien
+    // afficher du tout ; sinon on relance l'erreur pour que l'UI affiche un vrai échec
+    if (cached) return { ...cached, stale: true, fromCache: true };
+    throw e;
+  }
 }
 
 /* Espérance de gain façon Elo (formule standard, identique aux échecs) : probabilité
