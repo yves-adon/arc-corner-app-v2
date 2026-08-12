@@ -176,6 +176,13 @@ function computeFormLabel(series) {
   if (!series || series.ewma === null || series.ewma === undefined) return null;
   const vol = series.volatilite && series.volatilite > 0 ? series.volatilite : Math.sqrt(Math.max(Math.abs(series.ewma), 0.1));
   const ratio = Math.abs(series.ewma) / vol;
+  // ratio SIGNÉ (contrairement à `ratio` ci-dessus qui est une valeur absolue, donc
+  // toujours positive) — c'est CELUI-LÀ qu'il faut utiliser pour comparer deux équipes
+  // entre elles. Sans le signe, une équipe "Bonne forme" à 1.44 et une équipe "En
+  // perdition" à 1.05 semblent proches (écart 0.39) alors que l'écart réel de forme est
+  // +1.44 contre -1.05, soit 2.49 — un biais qui masque complètement l'ampleur du
+  // décalage entre les deux équipes.
+  const signedRatio = series.ewma / vol;
   let label, color;
   if (ratio < 0.5) {
     label = "Neutre";
@@ -187,7 +194,7 @@ function computeFormLabel(series) {
     label = ratio >= 1 ? "En perdition" : "Difficultés";
     color = ratio >= 1 ? C.fragile : C.jouable;
   }
-  return { label, ratio, color };
+  return { label, ratio, signedRatio, color };
 }
 /* Synthèse "quelle équipe + quelle mi-temps" pour un handicap corners — combine :
    - la projection croisée déjà utilisée ailleurs (projA vs projB) pour désigner
@@ -2025,7 +2032,15 @@ function SecondaryStatPanel({ label, unit, seriesA, seriesB, sourceA, sourceB, t
   const riskScore = ratioVerdict ? computeRiskScore(ratioVerdict.vol, proj.total, Math.min(seriesA.n, seriesB.n)) : null;
   const ewmaCheck = favoriSide && seriesA.ewma !== seriesB.ewma ? (seriesA.ewma > seriesB.ewma ? "A" : "B") === favoriSide : null;
   const partCheck = favoriSide && seriesA.part !== seriesB.part ? (seriesA.part > seriesB.part ? "A" : "B") === favoriSide : null;
-  const convergence = showRatioVerdict ? computeConvergence([ewmaCheck, partCheck, crossVenueAgree]) : null;
+  // check "forme" — comparaison sur le ratio SIGNÉ (voir computeFormLabel), donc valable
+  // sur toute la plage (Neutre/En forme/Difficultés compris, pas seulement les cas
+  // extrêmes Bonne forme/En perdition) : c'est un check indépendant du EWMA brut
+  // ci-dessus, puisque diviser par la volatilité propre à chaque équipe peut inverser
+  // l'ordre (ex : EWMA A > EWMA B mais A bien plus volatile que B → ratio signé B > A).
+  const formGapCheck = favoriSide && formA && formB && formA.signedRatio !== formB.signedRatio
+    ? (formA.signedRatio > formB.signedRatio ? "A" : "B") === favoriSide
+    : null;
+  const convergence = showRatioVerdict ? computeConvergence([ewmaCheck, partCheck, crossVenueAgree, formGapCheck]) : null;
   const rcA = showRatioVerdict ? computeRatioCumule({ projSide: proj.projA, projOther: proj.projB, ewma: seriesA.ewma, vol: seriesA.volatilite, part: seriesA.part }) : null;
   const rcB = showRatioVerdict ? computeRatioCumule({ projSide: proj.projB, projOther: proj.projA, ewma: seriesB.ewma, vol: seriesB.volatilite, part: seriesB.part }) : null;
   const rc = rcA && rcB ? { rcA: rcA.rc, rcB: rcB.rc, delta: rcA.rc - rcB.rc, labelA: teamAName || "A", labelB: teamBName || "B" } : null;
@@ -2147,20 +2162,33 @@ function SecondaryStatPanel({ label, unit, seriesA, seriesB, sourceA, sourceB, t
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
               <span style={{ fontSize: 11, color: C.teamA, minWidth: 70 }}>{teamAName || "Équipe A"}</span>
               <Pill color={formA.color}>{formA.label}</Pill>
-              <span style={{ color: C.faint, fontSize: 10 }}>ratio {formA.ratio.toFixed(2)}×</span>
+              <span style={{ color: C.faint, fontSize: 10 }}>
+                {formA.signedRatio >= 0 ? "+" : ""}{formA.signedRatio.toFixed(2)}×
+              </span>
             </div>
           )}
           {formB && (
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
               <span style={{ fontSize: 11, color: C.teamB, minWidth: 70 }}>{teamBName || "Équipe B"}</span>
               <Pill color={formB.color}>{formB.label}</Pill>
-              <span style={{ color: C.faint, fontSize: 10 }}>ratio {formB.ratio.toFixed(2)}×</span>
+              <span style={{ color: C.faint, fontSize: 10 }}>
+                {formB.signedRatio >= 0 ? "+" : ""}{formB.signedRatio.toFixed(2)}×
+              </span>
+            </div>
+          )}
+          {formA && formB && (
+            <div style={{ fontSize: 11, fontFamily: FONT_MONO, marginTop: 2 }}>
+              <span style={{ color: C.faint }}>écart de forme (signé, {teamAName || "A"} − {teamBName || "B"}) : </span>
+              <b style={{ color: formA.signedRatio - formB.signedRatio >= 0 ? C.teamA : C.teamB }}>
+                {formA.signedRatio - formB.signedRatio >= 0 ? "+" : ""}
+                {(formA.signedRatio - formB.signedRatio).toFixed(2)}
+              </b>
             </div>
           )}
           <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic", marginTop: 2 }}>
-            même principe que dans le profil solo : contrairement au badge volume des corners (seuil fixe), ce badge
-            s'appuie sur le ratio propre à chaque équipe — plus adapté aux buts, plus rares et plus volatils par
-            match que les corners
+            ratio signé (positif = bonne forme, négatif = mauvaise) — contrairement à un ratio en valeur absolue, celui-ci
+            permet de comparer directement les deux équipes sans biais : "Bonne forme +1.44" et "En perdition -1.05" ont
+            un écart réel de 2.49, pas 0.39
           </div>
         </div>
       )}
