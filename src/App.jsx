@@ -73,6 +73,74 @@ function computeVerdict({ moyenne, ligne, volatilite, fallbackVol }) {
   else if (ratio >= 0.5) verdict = "Jouable";
   return { sens, marge, vol, ratio, verdict, volSource };
 }
+/* ---------------------------------------------------------------
+   SIGNAL / RISQUE / CONVERGENCE / RATIO CUMULÉ (RC)
+   ---------------------------------------------------------------
+   Ajouté suite à une analyse externe (ChatGPT) du verdict Solide/Jouable/Fragile :
+   le verdict actuel (ratio marge/volatilité, cf computeVerdict ci-dessus) mélange en un
+   seul chiffre la force du signal et le risque — un vrai écart peut être classé
+   "Fragile" simplement parce que la volatilité est élevée, même si plusieurs autres
+   indicateurs convergent. Les fonctions ci-dessous SÉPARENT ces deux axes au lieu de les
+   fusionner, et ajoutent une mesure de convergence purement factuelle (% d'indicateurs
+   d'accord) — PAS un score à bonus/malus inventés (+10 par-ci, -10 par-là) : un barème
+   de points sans aucun backtest derrière donnerait une fausse impression de précision.
+   Le verdict Solide/Jouable/Fragile existant n'est pas remplacé : ces indicateurs
+   viennent en complément, affichés à côté, jamais fusionnés dans le badge existant. */
+
+/* Force du signal (0-100) — reconversion lisible du ratio marge/volatilité déjà utilisé
+   par computeVerdict. Logistique centrée sur 0.5 (le seuil "Jouable" actuel), pour éviter
+   qu'un ratio brut illisible (3.4×) ou qui explose au-delà de 100 (*100 direct) serve de
+   score. */
+function computeSignalScore(ratio) {
+  if (ratio === null || ratio === undefined || isNaN(ratio)) return null;
+  return Math.round(100 / (1 + Math.exp(-3.2 * (ratio - 0.5))));
+}
+
+/* Risque (0-100, 100 = risque max) — deux sources de risque indépendantes de la marge :
+   la volatilité RELATIVE (±2 sur une moyenne de 3 pèse bien plus que ±2 sur une moyenne
+   de 10) et la taille d'échantillon (peu de matchs = estimation fragile même si la
+   moyenne semble nette). Échantillon inconnu → score neutre (50), ni pénalisé ni
+   avantagé plutôt que de deviner. */
+function computeRiskScore(vol, moyenne, n) {
+  if (vol === null || vol === undefined || !moyenne) return null;
+  const volRel = Math.min(2, vol / Math.max(moyenne, 0.1));
+  const volScore = Math.min(100, volRel * 50);
+  const nScore = n === null || n === undefined ? 50 : Math.max(0, Math.min(100, 100 - (n - 3) * 11));
+  return Math.round(volScore * 0.6 + nScore * 0.4);
+}
+
+/* Convergence — % d'indicateurs indépendants qui désignent le MÊME favori que la
+   projection croisée principale. `checks` = liste de booléens (true = cet indicateur est
+   d'accord avec le favori) déjà résolus par l'appelant, volontairement — cette fonction
+   ne fait QUE compter, pour rester auditable : tu peux vérifier chaque check à la main
+   plutôt que de faire confiance à une boîte noire pondérée. */
+function computeConvergence(checks) {
+  const valid = checks.filter((c) => c !== null && c !== undefined);
+  if (!valid.length) return null;
+  const aligned = valid.filter(Boolean).length;
+  return { aligned, total: valid.length, pct: Math.round((aligned / valid.length) * 100) };
+}
+
+/* Ratio Cumulé (RC) — EXPÉRIMENTAL, EN OBSERVATION UNIQUEMENT (ne pèse sur aucun verdict
+   pour l'instant, uniquement affiché + tracké dans le Bilan). Somme de 3 sous-ratios de
+   domination pour un côté du duel :
+   - ratio de projection croisée (ce que cette équipe devrait produire vs l'adversaire)
+   - ratio de forme (1 + EWMA/volatilité : >1 si bonne forme, <1 si mauvaise — peut
+     devenir négatif si la mauvaise forme est très marquée, ce qui est voulu : ça tire le
+     RC vers le bas plutôt que de l'ignorer)
+   - ratio de part (part de production de cette équipe sur le volume total du duel)
+   Le but n'est PAS d'obtenir un chiffre "juste" du premier coup — c'est de générer une
+   variable trackée sur chaque pari (Bilan → Par Ratio Cumulé) pour vérifier sur la durée
+   si un écart RC élevé correspond réellement à un meilleur taux de réussite, avant de
+   l'intégrer à quoi que ce soit d'autre. Seuils à affiner une fois qu'il y a des données. */
+function computeRatioCumule({ projSide, projOther, ewma, vol, part }) {
+  if (projSide === null || projSide === undefined || projOther === null || projOther === undefined) return null;
+  const ratioProjection = projOther > 0 ? projSide / projOther : projSide > 0 ? 2 : 1;
+  const ratioForme = vol && vol > 0 && ewma !== null && ewma !== undefined ? 1 + ewma / vol : 1;
+  const ratioPart = part !== null && part !== undefined && part < 100 ? part / Math.max(100 - part, 1) : 1;
+  return { ratioProjection, ratioForme, ratioPart, rc: ratioProjection + ratioForme + ratioPart };
+}
+
 function impliedProb(cote) {
   const c = parseFloat(cote);
   if (!c || c <= 1) return null;
@@ -184,6 +252,51 @@ function ArcGauge({ ratio, verdict, size = 56 }) {
 /* ---------------------------------------------------------------
    SMALL UI PRIMITIVES
 --------------------------------------------------------------- */
+/* Bloc d'affichage Signal / Risque / Convergence / RC — complémentaire au verdict
+   Solide/Jouable/Fragile existant, jamais un remplacement. Rendu null-safe : chaque
+   sous-partie ne s'affiche que si la donnée est disponible, pour ne jamais afficher un
+   chiffre calculé sur des données absentes ou trompeuses. */
+function SignalRiskRow({ signal, risk, convergence, rc }) {
+  if (signal === null && risk === null && !convergence && !rc) return null;
+  const barColor = (score, inverse) => {
+    const v = inverse ? 100 - score : score;
+    return v >= 66 ? C.solide : v >= 33 ? C.jouable : C.fragile;
+  };
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
+      <span style={{ fontSize: 10, color: C.faint }}>signal / risque · expérimental, complémentaire au verdict :</span>
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+        {signal !== null && (
+          <div style={{ fontSize: 11.5, fontFamily: FONT_MONO }}>
+            <span style={{ color: C.faint }}>Signal </span>
+            <b style={{ color: barColor(signal, false) }}>{signal}/100</b>
+          </div>
+        )}
+        {risk !== null && (
+          <div style={{ fontSize: 11.5, fontFamily: FONT_MONO }}>
+            <span style={{ color: C.faint }}>Risque </span>
+            <b style={{ color: barColor(risk, true) }}>{risk}/100</b>
+          </div>
+        )}
+        {convergence && (
+          <div style={{ fontSize: 11.5, fontFamily: FONT_MONO }}>
+            <span style={{ color: C.faint }}>Convergence </span>
+            <b style={{ color: barColor(convergence.pct, false) }}>{convergence.pct}%</b>
+            <span style={{ color: C.faint }}> ({convergence.aligned}/{convergence.total})</span>
+          </div>
+        )}
+      </div>
+      {rc && (
+        <div style={{ fontSize: 10.5, color: C.faint, fontFamily: FONT_MONO }}>
+          RC {rc.labelA} <b style={{ color: C.teamA }}>{rc.rcA.toFixed(2)}</b> · RC {rc.labelB}{" "}
+          <b style={{ color: C.teamB }}>{rc.rcB.toFixed(2)}</b> · Δ{" "}
+          <b style={{ color: C.text }}>{rc.delta >= 0 ? "+" : ""}{rc.delta.toFixed(2)}</b>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Field({ label, children }) {
   return (
     <label className="flex flex-col gap-1" style={{ fontFamily: FONT_BODY }}>
@@ -279,6 +392,31 @@ function SplitBar({ left, right, colorLeft, colorRight, labelLeft, labelRight })
       <div style={{ display: "flex", height: 6, borderRadius: 4, overflow: "hidden", background: C.surface2 }}>
         <div style={{ width: `${pctLeft}%`, background: colorLeft }} />
         <div style={{ width: `${100 - pctLeft}%`, background: colorRight }} />
+      </div>
+    </div>
+  );
+}
+/* Jauge à 3 segments (Victoire / Nul / Défaite) — même principe que SplitBar, mais avec
+   le Nul VISIBLE sur la barre au lieu d'être relégué en texte à côté (contrairement à
+   ClubElo, où le % de nul est affiché mais absent du dégradé visuel). Les 3 pourcentages
+   sont normalisés pour toujours sommer à 100%, donc la barre reste juste même si les
+   chiffres d'entrée ont un léger arrondi. */
+function ThreeWayBar({ pctVic, pctNul, pctDef, labelVic, labelDef, colorVic = C.solide, colorDef = C.fragile, colorNul = C.faint }) {
+  const total = pctVic + pctNul + pctDef || 1;
+  const v = (pctVic / total) * 100;
+  const n = (pctNul / total) * 100;
+  const d = (pctDef / total) * 100;
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontFamily: FONT_MONO, marginBottom: 4 }}>
+        <span style={{ color: colorVic, fontWeight: 700 }}>{labelVic} {v.toFixed(0)}%</span>
+        <span style={{ color: colorNul, fontWeight: 700 }}>Nul {n.toFixed(0)}%</span>
+        <span style={{ color: colorDef, fontWeight: 700 }}>{labelDef} {d.toFixed(0)}%</span>
+      </div>
+      <div style={{ display: "flex", height: 6, borderRadius: 4, overflow: "hidden", background: C.surface2 }}>
+        <div style={{ width: `${v}%`, background: colorVic }} />
+        <div style={{ width: `${n}%`, background: colorNul }} />
+        <div style={{ width: `${d}%`, background: colorDef }} />
       </div>
     </div>
   );
@@ -1711,16 +1849,17 @@ function EloPanel({ teamAName, teamBName }) {
           {matchup && (
             <>
               <div style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 8, padding: 10 }}>
-                <SplitBar
-                  left={matchup.pHome * 100}
-                  right={matchup.pAway * 100}
-                  colorLeft={C.teamA}
-                  colorRight={C.teamB}
-                  labelLeft={`${(matchup.pHome * 100).toFixed(0)}%`}
-                  labelRight={`${(matchup.pAway * 100).toFixed(0)}%`}
+                <ThreeWayBar
+                  pctVic={matchup.pHome * 100}
+                  pctNul={matchup.pDraw * 100}
+                  pctDef={matchup.pAway * 100}
+                  labelVic={eloA.club}
+                  labelDef={eloB.club}
+                  colorVic={C.teamA}
+                  colorDef={C.teamB}
                 />
                 <div style={{ textAlign: "center", fontSize: 11, color: C.faint, marginTop: 6 }}>
-                  Nul : {(matchup.pDraw * 100).toFixed(0)}% · écart Elo {matchup.diff >= 0 ? "+" : ""}{matchup.diff.toFixed(0)} (avantage terrain de {eloA.club} déjà inclus)
+                  écart Elo {matchup.diff >= 0 ? "+" : ""}{matchup.diff.toFixed(0)} (avantage terrain de {eloA.club} déjà inclus)
                 </div>
               </div>
               <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic" }}>
@@ -1803,7 +1942,7 @@ function MiTempsRecommendation({ recMT1, recMT2, teamAName, teamBName, matchLabe
    attaques dangereuses — entièrement optionnel, n'apparaît que si les deux équipes ont
    assez de données saisies. Contexte domicile/extérieur déjà pris en compte puisque
    seriesA/seriesB viennent de pickVenueStats, comme pour les corners. */
-function SecondaryStatPanel({ label, unit, seriesA, seriesB, sourceA, sourceB, teamAName, teamBName, showHandicapSignal = false, showRatioVerdict = false, showFormLabels = false }) {
+function SecondaryStatPanel({ label, unit, seriesA, seriesB, sourceA, sourceB, teamAName, teamBName, showHandicapSignal = false, showRatioVerdict = false, showFormLabels = false, crossVenueAgree = null, vndA = null, vndB = null }) {
   if (!seriesA || !seriesB) return null;
   const proj = projection(seriesA.moyObtenus, seriesB.moyConcedes, seriesB.moyObtenus, seriesA.moyConcedes);
   const volCombined = seriesA.volatilite || seriesB.volatilite ? Math.sqrt(seriesA.volatilite ** 2 + seriesB.volatilite ** 2) : null;
@@ -1816,12 +1955,28 @@ function SecondaryStatPanel({ label, unit, seriesA, seriesB, sourceA, sourceB, t
   // (utile typiquement pour les buts, où le volume absolu n'a pas de sens comparable
   // aux corners)
   const ratioVerdict = showRatioVerdict ? computeVerdict({ moyenne: proj.projA, ligne: proj.projB, volatilite: volCombined }) : null;
-  const ratioFavori = ratioVerdict ? (ratioVerdict.sens === "Over" ? teamAName || "Équipe A" : teamBName || "Équipe B") : null;
+  const favoriSide = ratioVerdict ? (ratioVerdict.sens === "Over" ? "A" : "B") : null;
+  const ratioFavori = ratioVerdict ? (favoriSide === "A" ? teamAName || "Équipe A" : teamBName || "Équipe B") : null;
   // forme individuelle de chaque équipe (Bonne forme/En forme/Neutre/Difficultés/En
   // perdition) — indépendant du duel, contrairement au verdict ci-dessus qui compare
   // les deux équipes entre elles
   const formA = showFormLabels ? computeFormLabel(seriesA) : null;
   const formB = showFormLabels ? computeFormLabel(seriesB) : null;
+
+  // Signal / Risque / Convergence / RC — voir le commentaire au-dessus de
+  // computeSignalScore pour le raisonnement. Checks de convergence : EWMA d'accord avec
+  // le favori, part d'accord avec le favori, et (si transmis par le parent) le favori
+  // "tous lieux confondus" d'accord avec le favori "domicile/extérieur" — exactement le
+  // point soulevé dans l'analyse externe (Real vs Ferretti : proj domicile/ext ≈ proj
+  // globale).
+  const signalScore = ratioVerdict ? computeSignalScore(ratioVerdict.ratio) : null;
+  const riskScore = ratioVerdict ? computeRiskScore(ratioVerdict.vol, proj.total, Math.min(seriesA.n, seriesB.n)) : null;
+  const ewmaCheck = favoriSide && seriesA.ewma !== seriesB.ewma ? (seriesA.ewma > seriesB.ewma ? "A" : "B") === favoriSide : null;
+  const partCheck = favoriSide && seriesA.part !== seriesB.part ? (seriesA.part > seriesB.part ? "A" : "B") === favoriSide : null;
+  const convergence = showRatioVerdict ? computeConvergence([ewmaCheck, partCheck, crossVenueAgree]) : null;
+  const rcA = showRatioVerdict ? computeRatioCumule({ projSide: proj.projA, projOther: proj.projB, ewma: seriesA.ewma, vol: seriesA.volatilite, part: seriesA.part }) : null;
+  const rcB = showRatioVerdict ? computeRatioCumule({ projSide: proj.projB, projOther: proj.projA, ewma: seriesB.ewma, vol: seriesB.volatilite, part: seriesB.part }) : null;
+  const rc = rcA && rcB ? { rcA: rcA.rc, rcB: rcB.rc, delta: rcA.rc - rcB.rc, labelA: teamAName || "A", labelB: teamBName || "B" } : null;
 
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
@@ -1887,6 +2042,26 @@ function SecondaryStatPanel({ label, unit, seriesA, seriesB, sourceA, sourceB, t
           <span style={{ color: C.faint, fontSize: 10 }}>
             {ratioFavori} favori · marge {ratioVerdict.marge.toFixed(2)} · ratio {ratioVerdict.ratio.toFixed(2)}×
           </span>
+        </div>
+      )}
+
+      {showRatioVerdict && <SignalRiskRow signal={signalScore} risk={riskScore} convergence={convergence} rc={rc} />}
+
+      {(vndA || vndB) && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
+          <span style={{ fontSize: 10, color: C.faint }}>historique Vic/Nul/Déf de chaque équipe sur les {label.toLowerCase()} — {sourceA === sourceB ? sourceA : `${sourceA} / ${sourceB}`} :</span>
+          {vndA && (
+            <div>
+              <span style={{ fontSize: 10, color: C.teamA }}>{teamAName || "Équipe A"} ({vndA.n})</span>
+              <ThreeWayBar pctVic={vndA.vic} pctNul={vndA.nul} pctDef={vndA.def} labelVic="Vic" labelDef="Déf" colorVic={C.solide} colorDef={C.fragile} />
+            </div>
+          )}
+          {vndB && (
+            <div>
+              <span style={{ fontSize: 10, color: C.teamB }}>{teamBName || "Équipe B"} ({vndB.n})</span>
+              <ThreeWayBar pctVic={vndB.vic} pctNul={vndB.nul} pctDef={vndB.def} labelVic="Vic" labelDef="Déf" colorVic={C.solide} colorDef={C.fragile} />
+            </div>
+          )}
         </div>
       )}
 
@@ -2306,6 +2481,21 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
   const proj = projection(num(effA.obtenus), num(effB.concedes), num(effB.obtenus), num(effA.concedes));
   const matchLabel = `${teamA.nom || "Équipe A"} vs ${teamB.nom || "Équipe B"}`;
 
+  // Convergence buts : le favori désigné par la projection domicile/extérieur est-il le
+  // même que celui désigné par la projection tous lieux confondus ? Passé aux deux
+  // panneaux Buts ci-dessous comme un check de convergence de plus (symétrique : sert
+  // aussi bien au panneau venue qu'au panneau global, puisque c'est juste "ces deux
+  // lectures sont-elles d'accord").
+  const favoriButs = (sA, sB) => {
+    if (!sA || !sB) return null;
+    const p = projection(sA.moyObtenus, sB.moyConcedes, sB.moyObtenus, sA.moyConcedes);
+    if (p.projA === p.projB) return null;
+    return p.projA > p.projB ? "A" : "B";
+  };
+  const favoriButsVenue = favoriButs(effA.butsSeries, effB.butsSeries);
+  const favoriButsGlobal = favoriButs(statsATotal.butsSeries, statsBTotal.butsSeries);
+  const butsGlobalVenueAgree = favoriButsVenue && favoriButsGlobal ? favoriButsVenue === favoriButsGlobal : null;
+
   // synthèse "quelle équipe + quelle mi-temps" — répond directement à la question posée :
   // pas seulement les deux panneaux séparés, mais UNE recommandation qui compare les deux
   const recMT1 = evaluateMiTempsHandicap(effA.mt1Series, effB.mt1Series);
@@ -2546,6 +2736,9 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
         teamBName={teamB.nom}
         showRatioVerdict
         showFormLabels
+        crossVenueAgree={butsGlobalVenueAgree}
+        vndA={effA.vndButs}
+        vndB={effB.vndButs}
       />
 
       <SecondaryStatPanel
@@ -2559,6 +2752,9 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
         teamBName={teamB.nom}
         showRatioVerdict
         showFormLabels
+        crossVenueAgree={butsGlobalVenueAgree}
+        vndA={statsATotal.vndButs}
+        vndB={statsBTotal.vndButs}
       />
 
       <H2hSection h2h={h2h} setH2h={setH2h} teamAName={teamA.nom} teamBName={teamB.nom} seasonProj={proj.total} />
