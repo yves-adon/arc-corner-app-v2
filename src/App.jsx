@@ -421,6 +421,26 @@ function ThreeWayBar({ pctVic, pctNul, pctDef, labelVic, labelDef, colorVic = C.
     </div>
   );
 }
+/* Petite barre Over/Under (fréquence réelle, pas une projection) pour UNE équipe sur
+   SON historique propre — volontairement neutre en couleur (ni vert ni rouge) car
+   "Over" n'est ni bon ni mauvais en soi, ça dépend du pari. */
+function OuBar({ ou, label }) {
+  if (!ou) return null;
+  return (
+    <div style={{ marginTop: 4 }}>
+      <div style={{ fontSize: 9.5, color: C.faint, marginBottom: 2, fontFamily: FONT_MONO }}>{label} ({ou.n})</div>
+      <SplitBar
+        left={ou.over}
+        right={ou.under}
+        colorLeft={C.dim}
+        colorRight={C.faint}
+        labelLeft={`Over ${ou.pctOver.toFixed(0)}%`}
+        labelRight={`Under ${(100 - ou.pctOver).toFixed(0)}%`}
+      />
+    </div>
+  );
+}
+
 function addRowStyle() {
   return {
     marginTop: 10,
@@ -522,6 +542,33 @@ function computeVND(matches, obtKey, concKey) {
   return { n, vic, nul, def, pctVic: (vic / n) * 100 };
 }
 
+/* Taux Over/Under réel (fréquence empirique) sur le total match complet (obtenus +
+   concédés dans CHAQUE match propre de l'équipe) comparé à une ligne — sert de garde-fou
+   face à la projection par MOYENNE (EWMA), qui peut afficher un total élevé/faible sans
+   que ça reflète la fréquence réelle des matchs Over/Under (une moyenne est sensible à
+   quelques matchs extrêmes, une fréquence empirique beaucoup moins). Ligne volontairement
+   en .5 (jamais un entier) pour ne jamais avoir de push dans ce calcul. */
+function computeOverUnder(matches, obtKey, concKey, line) {
+  const valid = matches.filter((m) => m[obtKey] !== "" && m[obtKey] !== undefined && m[concKey] !== "" && m[concKey] !== undefined);
+  const n = valid.length;
+  if (!n) return null;
+  let over = 0;
+  valid.forEach((m) => {
+    if (num(m[obtKey]) + num(m[concKey]) > line) over++;
+  });
+  return { n, line, over, under: n - over, pctOver: (over / n) * 100 };
+}
+
+/* Arrondit une projection décimale à la ligne .5 la plus proche (2.5, 3.5, etc.) —
+   utilisé pour comparer la projection du match à une fréquence empirique sur LA MÊME
+   ligne que celle projetée, plutôt qu'une ligne fixe qui pourrait être hors sujet pour
+   ce match précis (ex : deux équipes très prolifiques où la ligne pertinente est 4.5,
+   pas 2.5). */
+function nearestHalfLine(x) {
+  if (x === null || x === undefined || isNaN(x)) return null;
+  return Math.round(x - 0.5) + 0.5;
+}
+
 /* Corrélation (Pearson r) + régression linéaire simple entre le total corners d'un
    match et le total d'une autre statistique (tirs ou attaques dangereuses), calculée
    sur l'historique propre d'UNE équipe (ses corners et sa stat dans SES matchs).
@@ -613,6 +660,8 @@ function computeHistoryStats(matches, alpha = 0.25, includeAdvanced = true) {
   // même logique EWMA/volatilité/projection que les corners
   const butsSeries = computeStatSeries(matches, "butsObtenus", "butsConcedes", alpha);
   const vndButs = computeVND(matches, "butsObtenus", "butsConcedes");
+  // taux Over/Under buts réel sur ligne fixe 2.5 — voir commentaire sur computeOverUnder
+  const ouButs25 = computeOverUnder(matches, "butsObtenus", "butsConcedes", 2.5);
 
   return {
     ...corners,
@@ -629,6 +678,7 @@ function computeHistoryStats(matches, alpha = 0.25, includeAdvanced = true) {
     vndMT2,
     butsSeries,
     vndButs,
+    ouButs25,
   };
 }
 
@@ -660,6 +710,7 @@ function pickVenueStats(team, venue, minN = 3) {
       vndMT2: venueStats.vndMT2,
       butsSeries: venueStats.butsSeries,
       vndButs: venueStats.vndButs,
+      ouButs25: venueStats.ouButs25,
     };
   }
   if (overall) {
@@ -681,9 +732,10 @@ function pickVenueStats(team, venue, minN = 3) {
       vndMT2: overall.vndMT2,
       butsSeries: overall.butsSeries,
       vndButs: overall.vndButs,
+      ouButs25: overall.ouButs25,
     };
   }
-  return { nom: team.nom, obtenus: num(team.obtenus), concedes: num(team.concedes), part: team.part, ewma: team.ewma, volatilite: null, source: "manuel", n: 0, tirsSeries: null, attDangSeries: null, mt1Series: null, mt2Series: null, vndTotal: null, vndMT1: null, vndMT2: null, butsSeries: null, vndButs: null };
+  return { nom: team.nom, obtenus: num(team.obtenus), concedes: num(team.concedes), part: team.part, ewma: team.ewma, volatilite: null, source: "manuel", n: 0, tirsSeries: null, attDangSeries: null, mt1Series: null, mt2Series: null, vndTotal: null, vndMT1: null, vndMT2: null, butsSeries: null, vndButs: null, ouButs25: null };
 }
 
 /* Variante pour les confrontations directes : on connaît les 2 équipes précises,
@@ -1942,7 +1994,7 @@ function MiTempsRecommendation({ recMT1, recMT2, teamAName, teamBName, matchLabe
    attaques dangereuses — entièrement optionnel, n'apparaît que si les deux équipes ont
    assez de données saisies. Contexte domicile/extérieur déjà pris en compte puisque
    seriesA/seriesB viennent de pickVenueStats, comme pour les corners. */
-function SecondaryStatPanel({ label, unit, seriesA, seriesB, sourceA, sourceB, teamAName, teamBName, showHandicapSignal = false, showRatioVerdict = false, showFormLabels = false, crossVenueAgree = null, vndA = null, vndB = null }) {
+function SecondaryStatPanel({ label, unit, seriesA, seriesB, sourceA, sourceB, teamAName, teamBName, showHandicapSignal = false, showRatioVerdict = false, showFormLabels = false, crossVenueAgree = null, vndA = null, vndB = null, ouFixedA = null, ouFixedB = null, ouDynamicA = null, ouDynamicB = null }) {
   if (!seriesA || !seriesB) return null;
   const proj = projection(seriesA.moyObtenus, seriesB.moyConcedes, seriesB.moyObtenus, seriesA.moyConcedes);
   const volCombined = seriesA.volatilite || seriesB.volatilite ? Math.sqrt(seriesA.volatilite ** 2 + seriesB.volatilite ** 2) : null;
@@ -2060,6 +2112,29 @@ function SecondaryStatPanel({ label, unit, seriesA, seriesB, sourceA, sourceB, t
             <div>
               <span style={{ fontSize: 10, color: C.teamB }}>{teamBName || "Équipe B"} ({vndB.n})</span>
               <ThreeWayBar pctVic={vndB.vic} pctNul={vndB.nul} pctDef={vndB.def} labelVic="Vic" labelDef="Déf" colorVic={C.solide} colorDef={C.fragile} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {(ouFixedA || ouFixedB || ouDynamicA || ouDynamicB) && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
+          <span style={{ fontSize: 10, color: C.faint }}>
+            taux Over/Under RÉEL de chaque équipe (fréquence sur son historique propre — à comparer à la projection par
+            moyenne ci-dessus, qui peut diverger si quelques matchs extrêmes tirent la moyenne) :
+          </span>
+          {(ouFixedA || ouDynamicA) && (
+            <div>
+              <span style={{ fontSize: 10, color: C.teamA }}>{teamAName || "Équipe A"}</span>
+              <OuBar ou={ouFixedA} label="ligne 2.5 (fixe)" />
+              {ouDynamicA && <OuBar ou={ouDynamicA} label={`ligne ${ouDynamicA.line} (≈ projection du match)`} />}
+            </div>
+          )}
+          {(ouFixedB || ouDynamicB) && (
+            <div>
+              <span style={{ fontSize: 10, color: C.teamB }}>{teamBName || "Équipe B"}</span>
+              <OuBar ou={ouFixedB} label="ligne 2.5 (fixe)" />
+              {ouDynamicB && <OuBar ou={ouDynamicB} label={`ligne ${ouDynamicB.line} (≈ projection du match)`} />}
             </div>
           )}
         </div>
@@ -2496,6 +2571,33 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
   const favoriButsGlobal = favoriButs(statsATotal.butsSeries, statsBTotal.butsSeries);
   const butsGlobalVenueAgree = favoriButsVenue && favoriButsGlobal ? favoriButsVenue === favoriButsGlobal : null;
 
+  // Taux Over/Under RÉEL par équipe (fréquence empirique, pas une moyenne) — calculé sur
+  // deux lignes : 2.5 fixe (standard) et la ligne la plus proche de la projection du
+  // match (pour comparer la fréquence réelle à CE QUE LE MODÈLE PROJETTE précisément,
+  // pas une ligne arbitraire qui pourrait être hors sujet). Nécessite les matchs bruts
+  // de chaque équipe, contrairement au reste du panneau qui ne travaille que sur les
+  // séries déjà agrégées.
+  const teamAVenueMatches = filterMatches(teamA).matches.filter((m) => m.lieu === "D");
+  const teamBVenueMatches = filterMatches(teamB).matches.filter((m) => m.lieu === "E");
+  const teamAAllMatches = filterMatches(teamA).matches;
+  const teamBAllMatches = filterMatches(teamB).matches;
+  const teamAForVenueOU = teamAVenueMatches.length >= 3 ? teamAVenueMatches : teamAAllMatches;
+  const teamBForVenueOU = teamBVenueMatches.length >= 3 ? teamBVenueMatches : teamBAllMatches;
+
+  const butsProjVenue = effA.butsSeries && effB.butsSeries
+    ? projection(effA.butsSeries.moyObtenus, effB.butsSeries.moyConcedes, effB.butsSeries.moyObtenus, effA.butsSeries.moyConcedes)
+    : null;
+  const butsProjGlobal = statsATotal.butsSeries && statsBTotal.butsSeries
+    ? projection(statsATotal.butsSeries.moyObtenus, statsBTotal.butsSeries.moyConcedes, statsBTotal.butsSeries.moyObtenus, statsATotal.butsSeries.moyConcedes)
+    : null;
+  const ligneVenue = butsProjVenue ? nearestHalfLine(butsProjVenue.total) : null;
+  const ligneGlobal = butsProjGlobal ? nearestHalfLine(butsProjGlobal.total) : null;
+
+  const ouDynVenueA = ligneVenue !== null ? computeOverUnder(teamAForVenueOU, "butsObtenus", "butsConcedes", ligneVenue) : null;
+  const ouDynVenueB = ligneVenue !== null ? computeOverUnder(teamBForVenueOU, "butsObtenus", "butsConcedes", ligneVenue) : null;
+  const ouDynGlobalA = ligneGlobal !== null ? computeOverUnder(teamAAllMatches, "butsObtenus", "butsConcedes", ligneGlobal) : null;
+  const ouDynGlobalB = ligneGlobal !== null ? computeOverUnder(teamBAllMatches, "butsObtenus", "butsConcedes", ligneGlobal) : null;
+
   // synthèse "quelle équipe + quelle mi-temps" — répond directement à la question posée :
   // pas seulement les deux panneaux séparés, mais UNE recommandation qui compare les deux
   const recMT1 = evaluateMiTempsHandicap(effA.mt1Series, effB.mt1Series);
@@ -2739,6 +2841,10 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
         crossVenueAgree={butsGlobalVenueAgree}
         vndA={effA.vndButs}
         vndB={effB.vndButs}
+        ouFixedA={effA.ouButs25}
+        ouFixedB={effB.ouButs25}
+        ouDynamicA={ouDynVenueA}
+        ouDynamicB={ouDynVenueB}
       />
 
       <SecondaryStatPanel
@@ -2755,6 +2861,10 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
         crossVenueAgree={butsGlobalVenueAgree}
         vndA={statsATotal.vndButs}
         vndB={statsBTotal.vndButs}
+        ouFixedA={statsATotal.ouButs25}
+        ouFixedB={statsBTotal.ouButs25}
+        ouDynamicA={ouDynGlobalA}
+        ouDynamicB={ouDynGlobalB}
       />
 
       <H2hSection h2h={h2h} setH2h={setH2h} teamAName={teamA.nom} teamBName={teamB.nom} seasonProj={proj.total} />
