@@ -571,6 +571,34 @@ function computeOverUnder(matches, obtKey, concKey, line) {
    ligne que celle projetée, plutôt qu'une ligne fixe qui pourrait être hors sujet pour
    ce match précis (ex : deux équipes très prolifiques où la ligne pertinente est 4.5,
    pas 2.5). */
+/* Points par match (PPG) — dérivé directement de vndButs (3×Vic + 1×Nul, divisé par n),
+   aucune nouvelle donnée nécessaire : c'est juste une autre lecture du Vic/Nul/Déf déjà
+   calculé, dans le format standard utilisé par la plupart des sites de stats. */
+function ppgFromVnd(vnd) {
+  if (!vnd || !vnd.n) return null;
+  return (vnd.vic * 3 + vnd.nul * 1) / vnd.n;
+}
+
+/* Clean sheet % — fréquence des matchs sans but encaissé, sur l'historique propre de
+   l'équipe. */
+function computeCleanSheet(matches, concKey) {
+  const valid = matches.filter((m) => m[concKey] !== "" && m[concKey] !== undefined);
+  const n = valid.length;
+  if (!n) return null;
+  const cs = valid.filter((m) => num(m[concKey]) === 0).length;
+  return { n, cs, pct: (cs / n) * 100 };
+}
+
+/* BTTS % (Both Teams To Score) — fréquence des matchs où l'équipe a marqué ET encaissé
+   au moins un but, sur son historique propre. */
+function computeBTTS(matches, obtKey, concKey) {
+  const valid = matches.filter((m) => m[obtKey] !== "" && m[obtKey] !== undefined && m[concKey] !== "" && m[concKey] !== undefined);
+  const n = valid.length;
+  if (!n) return null;
+  const btts = valid.filter((m) => num(m[obtKey]) > 0 && num(m[concKey]) > 0).length;
+  return { n, btts, pct: (btts / n) * 100 };
+}
+
 function nearestHalfLine(x) {
   if (x === null || x === undefined || isNaN(x)) return null;
   return Math.round(x - 0.5) + 0.5;
@@ -669,6 +697,9 @@ function computeHistoryStats(matches, alpha = 0.25, includeAdvanced = true) {
   const vndButs = computeVND(matches, "butsObtenus", "butsConcedes");
   // taux Over/Under buts réel sur ligne fixe 2.5 — voir commentaire sur computeOverUnder
   const ouButs25 = computeOverUnder(matches, "butsObtenus", "butsConcedes", 2.5);
+  const csButs = computeCleanSheet(matches, "butsConcedes");
+  const bttsButs = computeBTTS(matches, "butsObtenus", "butsConcedes");
+  const ppgButs = ppgFromVnd(vndButs);
 
   return {
     ...corners,
@@ -686,6 +717,9 @@ function computeHistoryStats(matches, alpha = 0.25, includeAdvanced = true) {
     butsSeries,
     vndButs,
     ouButs25,
+    csButs,
+    bttsButs,
+    ppgButs,
   };
 }
 
@@ -718,6 +752,9 @@ function pickVenueStats(team, venue, minN = 3) {
       butsSeries: venueStats.butsSeries,
       vndButs: venueStats.vndButs,
       ouButs25: venueStats.ouButs25,
+      csButs: venueStats.csButs,
+      bttsButs: venueStats.bttsButs,
+      ppgButs: venueStats.ppgButs,
     };
   }
   if (overall) {
@@ -740,9 +777,12 @@ function pickVenueStats(team, venue, minN = 3) {
       butsSeries: overall.butsSeries,
       vndButs: overall.vndButs,
       ouButs25: overall.ouButs25,
+      csButs: overall.csButs,
+      bttsButs: overall.bttsButs,
+      ppgButs: overall.ppgButs,
     };
   }
-  return { nom: team.nom, obtenus: num(team.obtenus), concedes: num(team.concedes), part: team.part, ewma: team.ewma, volatilite: null, source: "manuel", n: 0, tirsSeries: null, attDangSeries: null, mt1Series: null, mt2Series: null, vndTotal: null, vndMT1: null, vndMT2: null, butsSeries: null, vndButs: null, ouButs25: null };
+  return { nom: team.nom, obtenus: num(team.obtenus), concedes: num(team.concedes), part: team.part, ewma: team.ewma, volatilite: null, source: "manuel", n: 0, tirsSeries: null, attDangSeries: null, mt1Series: null, mt2Series: null, vndTotal: null, vndMT1: null, vndMT2: null, butsSeries: null, vndButs: null, ouButs25: null, csButs: null, bttsButs: null, ppgButs: null };
 }
 
 /* Variante pour les confrontations directes : on connaît les 2 équipes précises,
@@ -974,8 +1014,27 @@ function parseTotalCornerBlock(raw, teamName) {
     if (!finished) return;
 
     const matchWord = (zone) => targetWords.some((w) => zone.includes(w));
-    const isHome = target && (zoneHome.includes(target) || matchWord(zoneHome));
-    const isAway = target && (zoneAway.includes(target) || matchWord(zoneAway));
+    // Domicile/extérieur : le match EXACT du nom complet a toujours la priorité sur le
+    // repli mot-clé. Sans ça, deux clubs qui partagent un mot (ex. "CA Independiente" et
+    // "Independiente Rivadavia", deux clubs argentins différents) peuvent déclencher le
+    // repli des DEUX côtés à la fois — et l'ancien code retombait alors sur "domicile"
+    // par défaut sans vérifier, inversant silencieusement domicile/extérieur (et donc le
+    // score, les corners, les attaques) à chaque fois que l'équipe suivie jouait contre
+    // un adversaire au nom proche. Repli mot-clé gardé UNIQUEMENT quand aucun des deux
+    // côtés n'a de match exact — et si les DEUX côtés matchent par mot-clé (collision
+    // ambiguë), on ignore le match plutôt que de deviner et risquer l'inversion.
+    const exactHome = target && zoneHome.includes(target);
+    const exactAway = target && zoneAway.includes(target);
+    let isHome, isAway;
+    if (exactHome || exactAway) {
+      isHome = exactHome;
+      isAway = exactAway && !exactHome;
+    } else {
+      const wordHome = target && matchWord(zoneHome);
+      const wordAway = target && matchWord(zoneAway);
+      isHome = wordHome && !wordAway;
+      isAway = wordAway && !wordHome;
+    }
 
     if (isHome || isAway) {
       const result = {
@@ -2001,7 +2060,7 @@ function MiTempsRecommendation({ recMT1, recMT2, teamAName, teamBName, matchLabe
    attaques dangereuses — entièrement optionnel, n'apparaît que si les deux équipes ont
    assez de données saisies. Contexte domicile/extérieur déjà pris en compte puisque
    seriesA/seriesB viennent de pickVenueStats, comme pour les corners. */
-function SecondaryStatPanel({ label, unit, seriesA, seriesB, sourceA, sourceB, teamAName, teamBName, showHandicapSignal = false, showRatioVerdict = false, showFormLabels = false, crossVenueAgree = null, vndA = null, vndB = null, ouFixedA = null, ouFixedB = null, ouDynamicA = null, ouDynamicB = null }) {
+function SecondaryStatPanel({ label, unit, seriesA, seriesB, sourceA, sourceB, teamAName, teamBName, showHandicapSignal = false, showRatioVerdict = false, showFormLabels = false, crossVenueAgree = null, vndA = null, vndB = null, ouFixedA = null, ouFixedB = null, ouDynamicA = null, ouDynamicB = null, ppgA = null, ppgB = null, csA = null, csB = null, bttsA = null, bttsB = null }) {
   if (!seriesA || !seriesB) return null;
   const proj = projection(seriesA.moyObtenus, seriesB.moyConcedes, seriesB.moyObtenus, seriesA.moyConcedes);
   const volCombined = seriesA.volatilite || seriesB.volatilite ? Math.sqrt(seriesA.volatilite ** 2 + seriesB.volatilite ** 2) : null;
@@ -2150,6 +2209,28 @@ function SecondaryStatPanel({ label, unit, seriesA, seriesB, sourceA, sourceB, t
               <span style={{ fontSize: 10, color: C.teamB }}>{teamBName || "Équipe B"}</span>
               <OuBar ou={ouFixedB} label="ligne 2.5 (fixe)" />
               {ouDynamicB && <OuBar ou={ouDynamicB} label={`ligne ${ouDynamicB.line} (≈ projection du match)`} />}
+            </div>
+          )}
+        </div>
+      )}
+
+      {(ppgA !== null || ppgB !== null || csA || csB || bttsA || bttsB) && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 5, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
+          <span style={{ fontSize: 10, color: C.faint }}>PPG · Clean sheet · BTTS (historique propre de chaque équipe) :</span>
+          {(ppgA !== null || csA || bttsA) && (
+            <div style={{ fontSize: 11, fontFamily: FONT_MONO, color: C.dim, display: "flex", flexWrap: "wrap", gap: 4 }}>
+              <span style={{ color: C.teamA, marginRight: 4 }}>{teamAName || "Équipe A"}</span>
+              {ppgA !== null && <span>PPG <b style={{ color: C.text }}>{ppgA.toFixed(2)}</b></span>}
+              {csA && <span>· Clean sheet <b style={{ color: C.text }}>{csA.pct.toFixed(0)}%</b> ({csA.n})</span>}
+              {bttsA && <span>· BTTS <b style={{ color: C.text }}>{bttsA.pct.toFixed(0)}%</b> ({bttsA.n})</span>}
+            </div>
+          )}
+          {(ppgB !== null || csB || bttsB) && (
+            <div style={{ fontSize: 11, fontFamily: FONT_MONO, color: C.dim, display: "flex", flexWrap: "wrap", gap: 4 }}>
+              <span style={{ color: C.teamB, marginRight: 4 }}>{teamBName || "Équipe B"}</span>
+              {ppgB !== null && <span>PPG <b style={{ color: C.text }}>{ppgB.toFixed(2)}</b></span>}
+              {csB && <span>· Clean sheet <b style={{ color: C.text }}>{csB.pct.toFixed(0)}%</b> ({csB.n})</span>}
+              {bttsB && <span>· BTTS <b style={{ color: C.text }}>{bttsB.pct.toFixed(0)}%</b> ({bttsB.n})</span>}
             </div>
           )}
         </div>
@@ -2873,6 +2954,12 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
         ouFixedB={effB.ouButs25}
         ouDynamicA={ouDynVenueA}
         ouDynamicB={ouDynVenueB}
+        ppgA={effA.ppgButs}
+        ppgB={effB.ppgButs}
+        csA={effA.csButs}
+        csB={effB.csButs}
+        bttsA={effA.bttsButs}
+        bttsB={effB.bttsButs}
       />
 
       <SecondaryStatPanel
@@ -2893,6 +2980,12 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
         ouFixedB={statsBTotal.ouButs25}
         ouDynamicA={ouDynGlobalA}
         ouDynamicB={ouDynGlobalB}
+        ppgA={statsATotal.ppgButs}
+        ppgB={statsBTotal.ppgButs}
+        csA={statsATotal.csButs}
+        csB={statsBTotal.csButs}
+        bttsA={statsATotal.bttsButs}
+        bttsB={statsBTotal.bttsButs}
       />
 
       <H2hSection h2h={h2h} setH2h={setH2h} teamAName={teamA.nom} teamBName={teamB.nom} seasonProj={proj.total} />
