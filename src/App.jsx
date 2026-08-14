@@ -8,6 +8,7 @@ import {
 } from "recharts";
 import { extractPdfText } from "./lib/pdfExtract.js";
 import { fetchClubElo, computeEloMatchup } from "./lib/clubElo.js";
+import { saveTeamLeagueStats, getLeagueAverage, dominantLigue } from "./lib/leagueStats.js";
 
 /* ---------------------------------------------------------------
    THEME
@@ -700,6 +701,11 @@ function computeHistoryStats(matches, alpha = 0.25, includeAdvanced = true) {
   const csButs = computeCleanSheet(matches, "butsConcedes");
   const bttsButs = computeBTTS(matches, "butsObtenus", "butsConcedes");
   const ppgButs = ppgFromVnd(vndButs);
+  // xG (expected goals) — entièrement optionnel, saisi à la main match par match (champ
+  // "tirs/att. dangereuses/xG" avancé) ; computeStatSeries filtre déjà automatiquement
+  // aux matchs où les deux valeurs sont renseignées, donc null tant qu'aucun xG n'a été
+  // saisi, sans planter le reste des calculs.
+  const xGSeries = computeStatSeries(matches, "xGObtenus", "xGConcedes", alpha);
 
   return {
     ...corners,
@@ -720,6 +726,7 @@ function computeHistoryStats(matches, alpha = 0.25, includeAdvanced = true) {
     csButs,
     bttsButs,
     ppgButs,
+    xGSeries,
   };
 }
 
@@ -755,6 +762,7 @@ function pickVenueStats(team, venue, minN = 3) {
       csButs: venueStats.csButs,
       bttsButs: venueStats.bttsButs,
       ppgButs: venueStats.ppgButs,
+      xGSeries: venueStats.xGSeries,
     };
   }
   if (overall) {
@@ -780,9 +788,10 @@ function pickVenueStats(team, venue, minN = 3) {
       csButs: overall.csButs,
       bttsButs: overall.bttsButs,
       ppgButs: overall.ppgButs,
+      xGSeries: overall.xGSeries,
     };
   }
-  return { nom: team.nom, obtenus: num(team.obtenus), concedes: num(team.concedes), part: team.part, ewma: team.ewma, volatilite: null, source: "manuel", n: 0, tirsSeries: null, attDangSeries: null, mt1Series: null, mt2Series: null, vndTotal: null, vndMT1: null, vndMT2: null, butsSeries: null, vndButs: null, ouButs25: null, csButs: null, bttsButs: null, ppgButs: null };
+  return { nom: team.nom, obtenus: num(team.obtenus), concedes: num(team.concedes), part: team.part, ewma: team.ewma, volatilite: null, source: "manuel", n: 0, tirsSeries: null, attDangSeries: null, mt1Series: null, mt2Series: null, vndTotal: null, vndMT1: null, vndMT2: null, butsSeries: null, vndButs: null, ouButs25: null, csButs: null, bttsButs: null, ppgButs: null, xGSeries: null };
 }
 
 /* Variante pour les confrontations directes : on connaît les 2 équipes précises,
@@ -1485,12 +1494,16 @@ function MatchHistoryRows({ matches, setMatches, color, teamName, useAdvanced, o
                 <NumInput value={m.butsObtenus || ""} onChange={(v) => update(m.id, { ...m, butsObtenus: v })} placeholder="buts obt." accent={C.faint} />
                 <NumInput value={m.butsConcedes || ""} onChange={(v) => update(m.id, { ...m, butsConcedes: v })} placeholder="buts conc." accent={C.faint} />
               </div>
+              <div style={{ display: "flex", gap: 5, alignItems: "center", paddingLeft: 18 }}>
+                <NumInput value={m.xGObtenus || ""} onChange={(v) => update(m.id, { ...m, xGObtenus: v })} placeholder="xG créé" accent={C.faint} />
+                <NumInput value={m.xGConcedes || ""} onChange={(v) => update(m.id, { ...m, xGConcedes: v })} placeholder="xG concédé" accent={C.faint} />
+              </div>
             </>
           )}
         </div>
       ))}
       <button
-        onClick={() => setMatches([{ id: uid(), obtenus: "", concedes: "", lieu: "", tirsObtenus: "", tirsConcedes: "", attDangObtenus: "", attDangConcedes: "", corners1MTObtenus: "", corners1MTConcedes: "", corners2MTObtenus: "", corners2MTConcedes: "", butsObtenus: "", butsConcedes: "", ligue: "", date: "" }, ...matches])}
+        onClick={() => setMatches([{ id: uid(), obtenus: "", concedes: "", lieu: "", tirsObtenus: "", tirsConcedes: "", attDangObtenus: "", attDangConcedes: "", corners1MTObtenus: "", corners1MTConcedes: "", corners2MTObtenus: "", corners2MTConcedes: "", butsObtenus: "", butsConcedes: "", xGObtenus: "", xGConcedes: "", ligue: "", date: "" }, ...matches])}
         style={{ ...addRowStyle(), marginTop: 0, padding: "7px", fontSize: 12 }}
       >
         <Plus size={12} /> Ajouter un match
@@ -2060,7 +2073,7 @@ function MiTempsRecommendation({ recMT1, recMT2, teamAName, teamBName, matchLabe
    attaques dangereuses — entièrement optionnel, n'apparaît que si les deux équipes ont
    assez de données saisies. Contexte domicile/extérieur déjà pris en compte puisque
    seriesA/seriesB viennent de pickVenueStats, comme pour les corners. */
-function SecondaryStatPanel({ label, unit, seriesA, seriesB, sourceA, sourceB, teamAName, teamBName, showHandicapSignal = false, showRatioVerdict = false, showFormLabels = false, crossVenueAgree = null, vndA = null, vndB = null, ouFixedA = null, ouFixedB = null, ouDynamicA = null, ouDynamicB = null, ppgA = null, ppgB = null, csA = null, csB = null, bttsA = null, bttsB = null }) {
+function SecondaryStatPanel({ label, unit, seriesA, seriesB, sourceA, sourceB, teamAName, teamBName, showHandicapSignal = false, showRatioVerdict = false, showFormLabels = false, showXgExtras = false, crossVenueAgree = null, vndA = null, vndB = null, ouFixedA = null, ouFixedB = null, ouDynamicA = null, ouDynamicB = null, ppgA = null, ppgB = null, csA = null, csB = null, bttsA = null, bttsB = null, leagueAvg = null, xgFinishA = null, xgFinishB = null, xgPerShotA = null, xgPerShotB = null }) {
   if (!seriesA || !seriesB) return null;
   const proj = projection(seriesA.moyObtenus, seriesB.moyConcedes, seriesB.moyObtenus, seriesA.moyConcedes);
   const volCombined = seriesA.volatilite || seriesB.volatilite ? Math.sqrt(seriesA.volatilite ** 2 + seriesB.volatilite ** 2) : null;
@@ -2138,6 +2151,49 @@ function SecondaryStatPanel({ label, unit, seriesA, seriesB, sourceA, sourceB, t
         </div>
       </div>
 
+      {showXgExtras && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 5, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
+          <span style={{ fontSize: 10, color: C.faint }}>
+            xG pour/contre détaillé (EWMA séparé, pas juste le net ci-dessus) · avantage à la finition · xG par tir :
+          </span>
+          <div style={{ fontSize: 11, fontFamily: FONT_MONO, color: C.dim, display: "flex", flexWrap: "wrap", gap: 4 }}>
+            <span style={{ color: C.teamA, marginRight: 4 }}>{teamAName || "Équipe A"}</span>
+            <span>xG pour <b style={{ color: C.text }}>{seriesA.ewmaObtenus.toFixed(2)}</b></span>
+            <span>· xG contre <b style={{ color: C.text }}>{seriesA.ewmaConcedes.toFixed(2)}</b></span>
+            {xgFinishA !== null && (
+              <span>
+                · finition{" "}
+                <b style={{ color: xgFinishA >= 0 ? C.solide : C.fragile }}>
+                  {xgFinishA >= 0 ? "+" : ""}
+                  {xgFinishA.toFixed(2)}
+                </b>
+              </span>
+            )}
+            {xgPerShotA !== null && <span>· xG/tir <b style={{ color: C.text }}>{xgPerShotA.toFixed(2)}</b></span>}
+          </div>
+          <div style={{ fontSize: 11, fontFamily: FONT_MONO, color: C.dim, display: "flex", flexWrap: "wrap", gap: 4 }}>
+            <span style={{ color: C.teamB, marginRight: 4 }}>{teamBName || "Équipe B"}</span>
+            <span>xG pour <b style={{ color: C.text }}>{seriesB.ewmaObtenus.toFixed(2)}</b></span>
+            <span>· xG contre <b style={{ color: C.text }}>{seriesB.ewmaConcedes.toFixed(2)}</b></span>
+            {xgFinishB !== null && (
+              <span>
+                · finition{" "}
+                <b style={{ color: xgFinishB >= 0 ? C.solide : C.fragile }}>
+                  {xgFinishB >= 0 ? "+" : ""}
+                  {xgFinishB.toFixed(2)}
+                </b>
+              </span>
+            )}
+            {xgPerShotB !== null && <span>· xG/tir <b style={{ color: C.text }}>{xgPerShotB.toFixed(2)}</b></span>}
+          </div>
+          <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic" }}>
+            finition = buts marqués (EWMA) − xG créés (EWMA) : positif = finisseur plus clinique que la qualité de ses
+            occasions ne le suggère, négatif = gâche des occasions nettes. xG/tir = qualité moyenne des occasions
+            (nécessite les tirs saisis).
+          </div>
+        </div>
+      )}
+
       <div style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 8, padding: 10, fontFamily: FONT_MONO, fontSize: 11.5, color: C.dim }}>
         Projection {label.toLowerCase()} du match : <span style={{ color: C.teamA }}>{proj.projA.toFixed(2)}</span> +{" "}
         <span style={{ color: C.teamB }}>{proj.projB.toFixed(2)}</span> = <b style={{ color: C.text }}>{proj.total.toFixed(2)} {unit}</b>
@@ -2188,6 +2244,11 @@ function SecondaryStatPanel({ label, unit, seriesA, seriesB, sourceA, sourceB, t
               <ThreeWayBar pctVic={vndB.vic} pctNul={vndB.nul} pctDef={vndB.def} labelVic="Vic" labelDef="Déf" colorVic={C.solide} colorDef={C.fragile} />
             </div>
           )}
+          {leagueAvg && !leagueAvg.insufficient && leagueAvg.vicPct !== null && (
+            <div style={{ fontSize: 10, color: C.faint, fontFamily: FONT_MONO }}>
+              moyenne ligue (Vic) : <b style={{ color: C.dim }}>{leagueAvg.vicPct.toFixed(0)}%</b> — sur {leagueAvg.nTeams} équipes suivies dans cette ligue
+            </div>
+          )}
         </div>
       )}
 
@@ -2231,6 +2292,21 @@ function SecondaryStatPanel({ label, unit, seriesA, seriesB, sourceA, sourceB, t
               {ppgB !== null && <span>PPG <b style={{ color: C.text }}>{ppgB.toFixed(2)}</b></span>}
               {csB && <span>· Clean sheet <b style={{ color: C.text }}>{csB.pct.toFixed(0)}%</b> ({csB.n})</span>}
               {bttsB && <span>· BTTS <b style={{ color: C.text }}>{bttsB.pct.toFixed(0)}%</b> ({bttsB.n})</span>}
+            </div>
+          )}
+          {leagueAvg && !leagueAvg.insufficient && (leagueAvg.csPct !== null || leagueAvg.bttsPct !== null || leagueAvg.overPct !== null) && (
+            <div style={{ fontSize: 10, color: C.faint, fontFamily: FONT_MONO, marginTop: 2 }}>
+              moyenne ligue :
+              {leagueAvg.csPct !== null && <> Clean sheet <b style={{ color: C.dim }}>{leagueAvg.csPct.toFixed(0)}%</b></>}
+              {leagueAvg.bttsPct !== null && <> · BTTS <b style={{ color: C.dim }}>{leagueAvg.bttsPct.toFixed(0)}%</b></>}
+              {leagueAvg.overPct !== null && <> · Over 2.5 <b style={{ color: C.dim }}>{leagueAvg.overPct.toFixed(0)}%</b></>}
+              {" "}— sur {leagueAvg.nTeams} équipes
+            </div>
+          )}
+          {leagueAvg && leagueAvg.insufficient && (
+            <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic", marginTop: 2 }}>
+              moyenne ligue pas encore assez fiable ({leagueAvg.nTeams}/3 équipes suivies dans cette ligue) — se construit au
+              fil de tes analyses.
             </div>
           )}
         </div>
@@ -2662,6 +2738,42 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
   const statsATotal = computeHistoryStats(filterMatches(teamA).matches, 0.25, !!teamA.useAdvanced) || {};
   const statsBTotal = computeHistoryStats(filterMatches(teamB).matches, 0.25, !!teamB.useAdvanced) || {};
 
+  // Base multi-équipes pour la moyenne de ligue (voir lib/leagueStats.js) — dès qu'une
+  // équipe a des stats buts exploitables, on les enregistre sous sa ligue dominante.
+  // Best-effort, silencieux : ne bloque jamais le rendu si le stockage échoue.
+  useEffect(() => {
+    const ligue = dominantLigue(teamA.matches);
+    if (ligue && teamA.nom && statsATotal.vndButs) {
+      saveTeamLeagueStats(ligue, teamA.nom, statsATotal);
+    }
+  }, [teamA.matches, teamA.nom]);
+  useEffect(() => {
+    const ligue = dominantLigue(teamB.matches);
+    if (ligue && teamB.nom && statsBTotal.vndButs) {
+      saveTeamLeagueStats(ligue, teamB.nom, statsBTotal);
+    }
+  }, [teamB.matches, teamB.nom]);
+
+  // Moyenne de ligue affichée en référence dans le panneau "tous lieux confondus" — on
+  // prend la ligue dominante de l'équipe A comme ligue du duel (simplification : suppose
+  // que les deux équipes comparées jouent dans la même compétition, ce qui est le cas
+  // normal pour un pari sur un match entre elles).
+  const [leagueAvg, setLeagueAvg] = useState(null);
+  useEffect(() => {
+    const ligue = dominantLigue(teamA.matches) || dominantLigue(teamB.matches);
+    let cancelled = false;
+    if (!ligue) {
+      setLeagueAvg(null);
+      return;
+    }
+    getLeagueAverage(ligue).then((avg) => {
+      if (!cancelled) setLeagueAvg(avg);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [teamA.matches, teamB.matches]);
+
   const proj = projection(num(effA.obtenus), num(effB.concedes), num(effB.obtenus), num(effA.concedes));
   const matchLabel = `${teamA.nom || "Équipe A"} vs ${teamB.nom || "Équipe B"}`;
 
@@ -2679,6 +2791,31 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
   const favoriButsVenue = favoriButs(effA.butsSeries, effB.butsSeries);
   const favoriButsGlobal = favoriButs(statsATotal.butsSeries, statsBTotal.butsSeries);
   const butsGlobalVenueAgree = favoriButsVenue && favoriButsGlobal ? favoriButsVenue === favoriButsGlobal : null;
+
+  // xG : mêmes calculs croisés que pour les buts (favori venue vs global), plus les deux
+  // métriques dérivées spécifiques au xG — avantage à la finition (buts marqués EWMA −
+  // xG créés EWMA) et xG par tir (qualité moyenne des occasions, nécessite les tirs
+  // saisis). Tout est optionnel : si le xG n'a pas été saisi pour une équipe, ces valeurs
+  // restent null et le panneau xG ne s'affiche simplement pas pour elle.
+  const favoriXgVenue = favoriButs(effA.xGSeries, effB.xGSeries);
+  const favoriXgGlobal = favoriButs(statsATotal.xGSeries, statsBTotal.xGSeries);
+  const xgGlobalVenueAgree = favoriXgVenue && favoriXgGlobal ? favoriXgVenue === favoriXgGlobal : null;
+
+  const finishingEdge = (butsSeries, xgSeries) =>
+    butsSeries && xgSeries && butsSeries.ewmaObtenus !== null && xgSeries.ewmaObtenus !== null
+      ? butsSeries.ewmaObtenus - xgSeries.ewmaObtenus
+      : null;
+  const perShot = (xgSeries, shotsSeries) =>
+    xgSeries && shotsSeries && shotsSeries.moyObtenus > 0 ? xgSeries.moyObtenus / shotsSeries.moyObtenus : null;
+
+  const xgFinishVenueA = finishingEdge(effA.butsSeries, effA.xGSeries);
+  const xgFinishVenueB = finishingEdge(effB.butsSeries, effB.xGSeries);
+  const xgPerShotVenueA = perShot(effA.xGSeries, effA.tirsSeries);
+  const xgPerShotVenueB = perShot(effB.xGSeries, effB.tirsSeries);
+  const xgFinishGlobalA = finishingEdge(statsATotal.butsSeries, statsATotal.xGSeries);
+  const xgFinishGlobalB = finishingEdge(statsBTotal.butsSeries, statsBTotal.xGSeries);
+  const xgPerShotGlobalA = perShot(statsATotal.xGSeries, statsATotal.tirsSeries);
+  const xgPerShotGlobalB = perShot(statsBTotal.xGSeries, statsBTotal.tirsSeries);
 
   // Taux Over/Under RÉEL par équipe (fréquence empirique, pas une moyenne) — calculé sur
   // deux lignes : 2.5 fixe (standard) et la ligne la plus proche de la projection du
@@ -2986,6 +3123,45 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
         csB={statsBTotal.csButs}
         bttsA={statsATotal.bttsButs}
         bttsB={statsBTotal.bttsButs}
+        leagueAvg={leagueAvg}
+      />
+
+      <SecondaryStatPanel
+        label="xG (Expected Goals)"
+        unit="xG"
+        seriesA={effA.xGSeries}
+        seriesB={effB.xGSeries}
+        sourceA={effA.source}
+        sourceB={effB.source}
+        teamAName={teamA.nom}
+        teamBName={teamB.nom}
+        showRatioVerdict
+        showFormLabels
+        showXgExtras
+        crossVenueAgree={xgGlobalVenueAgree}
+        xgFinishA={xgFinishVenueA}
+        xgFinishB={xgFinishVenueB}
+        xgPerShotA={xgPerShotVenueA}
+        xgPerShotB={xgPerShotVenueB}
+      />
+
+      <SecondaryStatPanel
+        label="xG (Expected Goals) — tous lieux confondus"
+        unit="xG"
+        seriesA={statsATotal.xGSeries}
+        seriesB={statsBTotal.xGSeries}
+        sourceA="tous lieux confondus"
+        sourceB="tous lieux confondus"
+        teamAName={teamA.nom}
+        teamBName={teamB.nom}
+        showRatioVerdict
+        showFormLabels
+        showXgExtras
+        crossVenueAgree={xgGlobalVenueAgree}
+        xgFinishA={xgFinishGlobalA}
+        xgFinishB={xgFinishGlobalB}
+        xgPerShotA={xgPerShotGlobalA}
+        xgPerShotB={xgPerShotGlobalB}
       />
 
       <H2hSection h2h={h2h} setH2h={setH2h} teamAName={teamA.nom} teamBName={teamB.nom} seasonProj={proj.total} />
