@@ -2119,19 +2119,22 @@ function SecondaryStatPanel({ label, unit, seriesA, seriesB, sourceA, sourceB, t
 
   // Risques cachés combinés — deux checks FACTUELS (pas un score composite inventé) :
   // 1) l'adversaire du favori a-t-il une attaque dangereuse (EWMA) plus forte que le
-  //    favori lui-même ? Comparaison directe, pas de seuil à choisir.
+  //    favori lui-même ? Utilise la MÊME méthode de projection croisée que le panneau
+  //    "Attaques dangereuses" existant (ce que chaque équipe est censée produire FACE À
+  //    LA DÉFENSE de l'autre, pas juste sa moyenne brute dans l'absolu) — pour rester
+  //    cohérent avec ce que tu vois déjà ailleurs dans l'appli plutôt que d'introduire un
+  //    troisième calcul différent qui donnerait des chiffres difficiles à recouper.
   // 2) le favori lui-même perd/encaisse-t-il plus souvent que la moyenne de sa ligue ?
   //    Le seuil ici n'est PAS inventé — c'est la moyenne ligue réelle déjà calculée
   //    (voir leagueStats.js), donc ancré dans des données observées plutôt que dans une
   //    intuition. Les deux restent des DRAPEAUX affichés côte à côte, jamais fusionnés
   //    en un chiffre unique ni intégrés au verdict — jusqu'à ce qu'un vrai backtest
   //    montre qu'ils prédisent quelque chose.
-  const favoriAttDangSide =
-    attDangA && attDangB && attDangA.ewmaObtenus !== null && attDangB.ewmaObtenus !== null && attDangA.ewmaObtenus !== attDangB.ewmaObtenus
-      ? attDangA.ewmaObtenus > attDangB.ewmaObtenus
-        ? "A"
-        : "B"
+  const attDangProj =
+    attDangA && attDangB && attDangA.moyObtenus !== undefined && attDangB.moyObtenus !== undefined
+      ? projection(attDangA.moyObtenus, attDangB.moyConcedes, attDangB.moyObtenus, attDangA.moyConcedes)
       : null;
+  const favoriAttDangSide = attDangProj && attDangProj.projA !== attDangProj.projB ? (attDangProj.projA > attDangProj.projB ? "A" : "B") : null;
   const adversaireDangereuxCheck = favoriSide && favoriAttDangSide ? favoriAttDangSide !== favoriSide : null;
   const favoriVnd = favoriSide === "A" ? vndA : favoriSide === "B" ? vndB : null;
   const favoriDefPct = favoriVnd && favoriVnd.n ? (favoriVnd.def / favoriVnd.n) * 100 : null;
@@ -2263,9 +2266,9 @@ function SecondaryStatPanel({ label, unit, seriesA, seriesB, sourceA, sourceB, t
           {adversaireDangereuxCheck !== null && (
             <div style={{ fontSize: 11, color: adversaireDangereuxCheck ? C.fragile : C.dim }}>
               {adversaireDangereuxCheck ? "⚠️ " : "✓ "}
-              adversaire du favori plus dangereux (att. dang. EWMA {favoriAttDangSide === "A" ? teamBName || "B" : teamAName || "A"}{" "}
-              <b>{(favoriAttDangSide === "A" ? attDangB : attDangA).ewmaObtenus.toFixed(1)}</b> vs favori{" "}
-              <b>{(favoriAttDangSide === "A" ? attDangA : attDangB).ewmaObtenus.toFixed(1)}</b>)
+              adversaire du favori plus dangereux (proj. att. dang. {favoriSide === "A" ? teamBName || "B" : teamAName || "A"} (adversaire){" "}
+              <b>{(favoriSide === "A" ? attDangProj.projB : attDangProj.projA).toFixed(1)}</b> vs {favoriSide === "A" ? teamAName || "A" : teamBName || "B"}{" "}
+              (favori) <b>{(favoriSide === "A" ? attDangProj.projA : attDangProj.projB).toFixed(1)}</b>)
             </div>
           )}
           {favoriFragileCheck !== null && (
