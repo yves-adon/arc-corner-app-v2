@@ -108,10 +108,11 @@ export async function getLeagueAverage(ligue, minTeams = 3) {
     }
     if (records.length < minTeams) return { insufficient: true, nTeams: records.length };
 
-    let n = 0, vic = 0, nCs = 0, cs = 0, nBtts = 0, btts = 0, nOver = 0, over = 0;
+    let n = 0, vic = 0, def = 0, nCs = 0, cs = 0, nBtts = 0, btts = 0, nOver = 0, over = 0;
     records.forEach((r) => {
       n += r.n || 0;
       vic += r.vic || 0;
+      def += r.def || 0;
       nCs += r.csN || 0;
       cs += r.cs || 0;
       nBtts += r.bttsN || 0;
@@ -124,6 +125,7 @@ export async function getLeagueAverage(ligue, minTeams = 3) {
       insufficient: false,
       nTeams: records.length,
       vicPct: n ? (vic / n) * 100 : null,
+      defPct: n ? (def / n) * 100 : null,
       csPct: nCs ? (cs / nCs) * 100 : null,
       bttsPct: nBtts ? (btts / nBtts) * 100 : null,
       overPct: nOver ? (over / nOver) * 100 : null,
