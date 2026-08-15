@@ -2073,7 +2073,7 @@ function MiTempsRecommendation({ recMT1, recMT2, teamAName, teamBName, matchLabe
    attaques dangereuses — entièrement optionnel, n'apparaît que si les deux équipes ont
    assez de données saisies. Contexte domicile/extérieur déjà pris en compte puisque
    seriesA/seriesB viennent de pickVenueStats, comme pour les corners. */
-function SecondaryStatPanel({ label, unit, seriesA, seriesB, sourceA, sourceB, teamAName, teamBName, showHandicapSignal = false, showRatioVerdict = false, showFormLabels = false, showXgExtras = false, crossVenueAgree = null, vndA = null, vndB = null, ouFixedA = null, ouFixedB = null, ouDynamicA = null, ouDynamicB = null, ppgA = null, ppgB = null, csA = null, csB = null, bttsA = null, bttsB = null, leagueAvg = null, xgFinishA = null, xgFinishB = null, xgPerShotA = null, xgPerShotB = null }) {
+function SecondaryStatPanel({ label, unit, seriesA, seriesB, sourceA, sourceB, teamAName, teamBName, showHandicapSignal = false, showRatioVerdict = false, showFormLabels = false, showXgExtras = false, crossVenueAgree = null, vndA = null, vndB = null, ouFixedA = null, ouFixedB = null, ouDynamicA = null, ouDynamicB = null, ppgA = null, ppgB = null, csA = null, csB = null, bttsA = null, bttsB = null, leagueAvg = null, xgFinishA = null, xgFinishB = null, xgPerShotA = null, xgPerShotB = null, attDangA = null, attDangB = null }) {
   if (!seriesA || !seriesB) return null;
   const proj = projection(seriesA.moyObtenus, seriesB.moyConcedes, seriesB.moyObtenus, seriesA.moyConcedes);
   const volCombined = seriesA.volatilite || seriesB.volatilite ? Math.sqrt(seriesA.volatilite ** 2 + seriesB.volatilite ** 2) : null;
@@ -2116,6 +2116,29 @@ function SecondaryStatPanel({ label, unit, seriesA, seriesB, sourceA, sourceB, t
   const rcA = showRatioVerdict ? computeRatioCumule({ projSide: proj.projA, projOther: proj.projB, ewma: seriesA.ewma, vol: seriesA.volatilite, part: seriesA.part }) : null;
   const rcB = showRatioVerdict ? computeRatioCumule({ projSide: proj.projB, projOther: proj.projA, ewma: seriesB.ewma, vol: seriesB.volatilite, part: seriesB.part }) : null;
   const rc = rcA && rcB ? { rcA: rcA.rc, rcB: rcB.rc, delta: rcA.rc - rcB.rc, labelA: teamAName || "A", labelB: teamBName || "B" } : null;
+
+  // Risques cachés combinés — deux checks FACTUELS (pas un score composite inventé) :
+  // 1) l'adversaire du favori a-t-il une attaque dangereuse (EWMA) plus forte que le
+  //    favori lui-même ? Comparaison directe, pas de seuil à choisir.
+  // 2) le favori lui-même perd/encaisse-t-il plus souvent que la moyenne de sa ligue ?
+  //    Le seuil ici n'est PAS inventé — c'est la moyenne ligue réelle déjà calculée
+  //    (voir leagueStats.js), donc ancré dans des données observées plutôt que dans une
+  //    intuition. Les deux restent des DRAPEAUX affichés côte à côte, jamais fusionnés
+  //    en un chiffre unique ni intégrés au verdict — jusqu'à ce qu'un vrai backtest
+  //    montre qu'ils prédisent quelque chose.
+  const favoriAttDangSide =
+    attDangA && attDangB && attDangA.ewmaObtenus !== null && attDangB.ewmaObtenus !== null && attDangA.ewmaObtenus !== attDangB.ewmaObtenus
+      ? attDangA.ewmaObtenus > attDangB.ewmaObtenus
+        ? "A"
+        : "B"
+      : null;
+  const adversaireDangereuxCheck = favoriSide && favoriAttDangSide ? favoriAttDangSide !== favoriSide : null;
+  const favoriVnd = favoriSide === "A" ? vndA : favoriSide === "B" ? vndB : null;
+  const favoriDefPct = favoriVnd && favoriVnd.n ? (favoriVnd.def / favoriVnd.n) * 100 : null;
+  const favoriFragileCheck =
+    favoriDefPct !== null && leagueAvg && !leagueAvg.insufficient && leagueAvg.defPct !== null ? favoriDefPct > leagueAvg.defPct : null;
+  const dangerChecks = [adversaireDangereuxCheck, favoriFragileCheck].filter((c) => c !== null && c !== undefined);
+  const dangerCount = dangerChecks.filter(Boolean).length;
 
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
@@ -2228,6 +2251,32 @@ function SecondaryStatPanel({ label, unit, seriesA, seriesB, sourceA, sourceB, t
       )}
 
       {showRatioVerdict && <SignalRiskRow signal={signalScore} risk={riskScore} convergence={convergence} rc={rc} />}
+
+      {showRatioVerdict && dangerChecks.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 5, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 10, color: C.faint }}>risques cachés (observationnel, ne pèse pas sur le verdict) :</span>
+            <Pill color={dangerCount === 0 ? C.solide : dangerCount === dangerChecks.length ? C.fragile : C.jouable}>
+              {dangerCount}/{dangerChecks.length}
+            </Pill>
+          </div>
+          {adversaireDangereuxCheck !== null && (
+            <div style={{ fontSize: 11, color: adversaireDangereuxCheck ? C.fragile : C.dim }}>
+              {adversaireDangereuxCheck ? "⚠️ " : "✓ "}
+              adversaire du favori plus dangereux (att. dang. EWMA {favoriAttDangSide === "A" ? teamBName || "B" : teamAName || "A"}{" "}
+              <b>{(favoriAttDangSide === "A" ? attDangB : attDangA).ewmaObtenus.toFixed(1)}</b> vs favori{" "}
+              <b>{(favoriAttDangSide === "A" ? attDangA : attDangB).ewmaObtenus.toFixed(1)}</b>)
+            </div>
+          )}
+          {favoriFragileCheck !== null && (
+            <div style={{ fontSize: 11, color: favoriFragileCheck ? C.fragile : C.dim }}>
+              {favoriFragileCheck ? "⚠️ " : "✓ "}
+              favori ({favoriSide === "A" ? teamAName || "A" : teamBName || "B"}) Déf <b>{favoriDefPct.toFixed(0)}%</b> vs moyenne ligue{" "}
+              <b>{leagueAvg.defPct.toFixed(0)}%</b>
+            </div>
+          )}
+        </div>
+      )}
 
       {(vndA || vndB) && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
@@ -2499,12 +2548,6 @@ function IndividuelRow({ item, onChange, onRemove, onAddBet }) {
    privilégie les confrontations récentes, comme pour la forme des équipes. */
 function computeH2hStats(matches, alpha = 0.25) {
   const valid = matches.filter((m) => m.obtenusA !== "" && m.obtenusB !== "");
-  if (!valid.length) return null;
-  const n = valid.length;
-  const aVals = valid.map((m) => num(m.obtenusA));
-  const bVals = valid.map((m) => num(m.obtenusB));
-  const totals = valid.map((m) => num(m.obtenusA) + num(m.obtenusB));
-
   const mean = (arr) => arr.reduce((s, t) => s + t, 0) / arr.length;
   const std = (arr, m) => Math.sqrt(arr.reduce((s, t) => s + (t - m) ** 2, 0) / arr.length);
   const ewmaOf = (arr) => {
@@ -2514,26 +2557,71 @@ function computeH2hStats(matches, alpha = 0.25) {
     return e;
   };
 
-  const moyenneTotal = mean(totals);
-  const moyenneA = mean(aVals);
-  const moyenneB = mean(bVals);
-  const seuils = [7.5, 8.5, 9.5, 10.5];
-  const overRates = {};
-  seuils.forEach((s) => (overRates[s] = totals.filter((t) => t > s).length / n));
+  let corners = null;
+  if (valid.length) {
+    const n = valid.length;
+    const aVals = valid.map((m) => num(m.obtenusA));
+    const bVals = valid.map((m) => num(m.obtenusB));
+    const totals = valid.map((m) => num(m.obtenusA) + num(m.obtenusB));
+    const moyenneTotal = mean(totals);
+    const moyenneA = mean(aVals);
+    const moyenneB = mean(bVals);
+    const seuils = [7.5, 8.5, 9.5, 10.5];
+    const overRates = {};
+    seuils.forEach((s) => (overRates[s] = totals.filter((t) => t > s).length / n));
+    corners = {
+      n,
+      moyenneTotal,
+      moyennePondereeTotal: ewmaOf(totals),
+      volatiliteTotal: std(totals, moyenneTotal),
+      overRates,
+      moyenneA,
+      moyennePondereeA: ewmaOf(aVals),
+      volatiliteA: std(aVals, moyenneA),
+      moyenneB,
+      moyennePondereeB: ewmaOf(bVals),
+      volatiliteB: std(bVals, moyenneB),
+    };
+  }
 
-  return {
-    n,
-    moyenneTotal,
-    moyennePondereeTotal: ewmaOf(totals),
-    volatiliteTotal: std(totals, moyenneTotal),
-    overRates,
-    moyenneA,
-    moyennePondereeA: ewmaOf(aVals),
-    volatiliteA: std(aVals, moyenneA),
-    moyenneB,
-    moyennePondereeB: ewmaOf(bVals),
-    volatiliteB: std(bVals, moyenneB),
-  };
+  // Buts H2H — même principe que les corners ci-dessus (brute/pondérée/volatilité), PLUS
+  // un découpage par qui recevait (home: "A"|"B"). Contrairement aux corners, l'avantage
+  // du terrain influence fortement les buts (une équipe qui reçoit marque en général
+  // plus qu'en déplacement), donc regrouper "A domicile" et "B domicile" dans une seule
+  // moyenne masquerait cette asymétrie — d'où les deux sous-blocs whenAHome/whenBHome.
+  const validButs = matches.filter((m) => m.butsA !== "" && m.butsA !== undefined && m.butsB !== "" && m.butsB !== undefined);
+  let buts = null;
+  if (validButs.length) {
+    const nB = validButs.length;
+    const aB = validButs.map((m) => num(m.butsA));
+    const bB = validButs.map((m) => num(m.butsB));
+    const totalsB = validButs.map((m) => num(m.butsA) + num(m.butsB));
+    const moyenneTotalB = mean(totalsB);
+    const splitStats = (subset) =>
+      subset.length
+        ? {
+            n: subset.length,
+            moyenneTotal: mean(subset.map((m) => num(m.butsA) + num(m.butsB))),
+            moyenneA: mean(subset.map((m) => num(m.butsA))),
+            moyenneB: mean(subset.map((m) => num(m.butsB))),
+          }
+        : null;
+    buts = {
+      n: nB,
+      moyenneTotal: moyenneTotalB,
+      moyennePondereeTotal: ewmaOf(totalsB),
+      volatiliteTotal: std(totalsB, moyenneTotalB),
+      moyenneA: mean(aB),
+      moyennePondereeA: ewmaOf(aB),
+      moyenneB: mean(bB),
+      moyennePondereeB: ewmaOf(bB),
+      whenAHome: splitStats(validButs.filter((m) => m.home === "A")),
+      whenBHome: splitStats(validButs.filter((m) => m.home === "B")),
+    };
+  }
+
+  if (!corners && !buts) return null;
+  return { ...corners, buts };
 }
 
 function RawExtractH2h({ teamAName, teamBName, onImport }) {
@@ -2600,13 +2688,44 @@ function H2hSection({ h2h, setH2h, teamAName, teamBName, seasonProj }) {
   const importBulk = () => {
     const lines = bulkText.split("\n").map((l) => l.trim()).filter(Boolean);
     const parsed = [];
+    // mot-clé (pas le nom complet — "Nagoya" doit matcher même si l'équipe est
+    // enregistrée comme "Nagoya Grampus") ; premier mot ≥3 lettres, même logique que le
+    // matching de nom déjà utilisé ailleurs dans l'appli (parser TotalCorner)
+    const aWord = (teamAName || "").trim().toLowerCase().split(/\s+/).find((w) => w.length >= 3) || "";
+    const bWord = (teamBName || "").trim().toLowerCase().split(/\s+/).find((w) => w.length >= 3) || "";
+    const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     for (const line of lines) {
+      // format buts + domicile : une ligne avec un score "X-Y" et une marque de qui
+      // recevait (nom d'équipe reconnu, ou lettre A/B en repli) — ex :
+      // "25-09-27 Nagoya 0-4" ou juste "B 0-4"
+      const tokens = line.split(/\s+/);
+      // le score doit être un token ENTIER "X-Y" (un seul tiret) — sinon une date comme
+      // "25-09-27" (deux tirets) se ferait passer pour un score via un regex non ancré
+      const scoreTok = tokens.find((t) => /^\d+-\d+$/.test(t));
+      if (scoreTok) {
+        let home = null;
+        if (aWord && new RegExp(`\\b${escapeRe(aWord)}`, "i").test(line)) home = "A";
+        else if (bWord && new RegExp(`\\b${escapeRe(bWord)}`, "i").test(line)) home = "B";
+        else if (/(^|\s)a(\s|$)/i.test(line)) home = "A";
+        else if (/(^|\s)b(\s|$)/i.test(line)) home = "B";
+        if (home) {
+          const [hVal, aVal] = scoreTok.split("-");
+          const butsA = home === "A" ? hVal : aVal;
+          const butsB = home === "B" ? hVal : aVal;
+          const dateTok = tokens.find((t) => t !== scoreTok && /^\d[\d/-]*\d$/.test(t));
+          parsed.push({ id: uid(), obtenusA: "", obtenusB: "", home, butsA, butsB, date: dateTok || "" });
+          continue;
+        }
+      }
+      // sinon, format classique : deux nombres = corners équipe A puis B
       const nums = line.match(/-?\d+(\.\d+)?/g);
       if (!nums || nums.length < 2) continue;
-      parsed.push({ id: uid(), obtenusA: nums[0], obtenusB: nums[1] });
+      parsed.push({ id: uid(), obtenusA: nums[0], obtenusB: nums[1], home: null, butsA: "", butsB: "", date: "" });
     }
     if (!parsed.length) {
-      setBulkError(`Aucune paire reconnue — un match par ligne, corners ${teamAName || "équipe A"} puis ${teamBName || "équipe B"}, ex : 5 4`);
+      setBulkError(
+        `Aucune ligne reconnue — soit deux nombres (corners ${teamAName || "équipe A"} puis ${teamBName || "équipe B"}, ex : 5 4), soit une ligne avec le nom de l'équipe qui recevait et le score, ex : ${teamAName || "Équipe A"} 1-0`
+      );
       return;
     }
     setH2h([...parsed, ...h2h]);
@@ -2642,9 +2761,10 @@ function H2hSection({ h2h, setH2h, teamAName, teamBName, seasonProj }) {
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
             <div style={{ fontSize: 10.5, color: C.faint }}>
-              Un match par ligne (plus récent en haut) : corners {teamAName || "équipe A"} puis {teamBName || "équipe B"}, ex : 5 4
+              Un match par ligne (plus récent en haut) — soit corners {teamAName || "équipe A"} puis {teamBName || "équipe B"} (ex : 5 4),
+              soit domicile + score buts pour capturer le contexte domicile/extérieur (ex : {teamAName || "Équipe A"} 1-0, ou juste "A 1-0").
             </div>
-            <textarea value={bulkText} onChange={(e) => setBulkText(e.target.value)} placeholder={"5 4\n3 6\n4 4\n..."} rows={4} style={{ ...inputStyle, resize: "vertical", fontSize: 13 }} />
+            <textarea value={bulkText} onChange={(e) => setBulkText(e.target.value)} placeholder={"5 4\n" + (teamAName || "Équipe A") + " 1-0\nB 0-4\n..."} rows={5} style={{ ...inputStyle, resize: "vertical", fontSize: 13 }} />
             {bulkError && <div style={{ fontSize: 11, color: C.fragile }}>{bulkError}</div>}
             <div style={{ display: "flex", gap: 6 }}>
               <button onClick={importBulk} style={{ flex: 1, background: C.solide + "22", color: C.solide, border: `1px solid ${C.solide}55`, borderRadius: 6, padding: "6px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Importer</button>
@@ -2662,22 +2782,50 @@ function H2hSection({ h2h, setH2h, teamAName, teamBName, seasonProj }) {
             <span style={{ flex: 1, color: C.teamB }}>{teamBName || "Équipe B"}</span>
           </div>
           {h2h.map((m, i) => (
-            <div key={m.id} style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <span style={{ fontSize: 10, color: C.faint, width: 14, fontFamily: FONT_MONO }}>{i + 1}</span>
-              <NumInput value={m.obtenusA} onChange={(v) => update(m.id, { ...m, obtenusA: v })} placeholder="corners" accent={C.teamA} />
-              <NumInput value={m.obtenusB} onChange={(v) => update(m.id, { ...m, obtenusB: v })} placeholder="corners" accent={C.teamB} />
-              <IconBtn onClick={() => remove(m.id)} color={C.faint} title="Supprimer"><Trash2 size={13} /></IconBtn>
+            <div key={m.id} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <span style={{ fontSize: 10, color: C.faint, width: 14, fontFamily: FONT_MONO }}>{i + 1}</span>
+                <NumInput value={m.obtenusA} onChange={(v) => update(m.id, { ...m, obtenusA: v })} placeholder="corners" accent={C.teamA} />
+                <NumInput value={m.obtenusB} onChange={(v) => update(m.id, { ...m, obtenusB: v })} placeholder="corners" accent={C.teamB} />
+                <IconBtn onClick={() => remove(m.id)} color={C.faint} title="Supprimer"><Trash2 size={13} /></IconBtn>
+              </div>
+              <div style={{ display: "flex", gap: 6, alignItems: "center", paddingLeft: 20 }}>
+                <span style={{ fontSize: 9.5, color: C.faint, flexShrink: 0 }}>domicile :</span>
+                <div style={{ display: "flex", flexShrink: 0, borderRadius: 6, overflow: "hidden", border: `1px solid ${C.line}` }}>
+                  {["A", "B"].map((v) => (
+                    <button
+                      key={v}
+                      onClick={() => update(m.id, { ...m, home: m.home === v ? null : v })}
+                      title={v === "A" ? teamAName || "Équipe A" : teamBName || "Équipe B"}
+                      style={{
+                        width: 22,
+                        height: 24,
+                        fontSize: 10,
+                        fontWeight: 700,
+                        border: "none",
+                        background: m.home === v ? (v === "A" ? C.teamA : C.teamB) + "33" : C.surface2,
+                        color: m.home === v ? (v === "A" ? C.teamA : C.teamB) : C.faint,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {v}
+                    </button>
+                  ))}
+                </div>
+                <NumInput value={m.butsA || ""} onChange={(v) => update(m.id, { ...m, butsA: v })} placeholder="buts A" accent={C.teamA} />
+                <NumInput value={m.butsB || ""} onChange={(v) => update(m.id, { ...m, butsB: v })} placeholder="buts B" accent={C.teamB} />
+              </div>
             </div>
           ))}
         </div>
       )}
-      <button onClick={() => setH2h([{ id: uid(), obtenusA: "", obtenusB: "" }, ...h2h])} style={{ ...addRowStyle(), marginTop: 0 }}>
+      <button onClick={() => setH2h([{ id: uid(), obtenusA: "", obtenusB: "", home: null, butsA: "", butsB: "", date: "" }, ...h2h])} style={{ ...addRowStyle(), marginTop: 0 }}>
         <Plus size={13} /> Ajouter un match
       </button>
 
-      {stats && (
+      {stats && stats.n !== undefined && (
         <div style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 8, padding: 10, fontFamily: FONT_MONO, fontSize: 11.5, color: C.dim, display: "flex", flexDirection: "column", gap: 4 }}>
-          <div>Calculé sur <b style={{ color: C.text }}>{stats.n}</b> confrontation{stats.n > 1 ? "s" : ""}</div>
+          <div>Calculé sur <b style={{ color: C.text }}>{stats.n}</b> confrontation{stats.n > 1 ? "s" : ""} (corners)</div>
           <div>
             total brute <b style={{ color: C.text }}>{stats.moyenneTotal.toFixed(2)}</b> · pondérée récente{" "}
             <b style={{ color: C.text }}>{stats.moyennePondereeTotal.toFixed(2)}</b>
@@ -2698,7 +2846,41 @@ function H2hSection({ h2h, setH2h, teamAName, teamBName, seasonProj }) {
         </div>
       )}
 
-      {stats && seasonProj && (
+      {stats && stats.buts && (
+        <div style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 8, padding: 10, fontFamily: FONT_MONO, fontSize: 11.5, color: C.dim, display: "flex", flexDirection: "column", gap: 4 }}>
+          <div>Calculé sur <b style={{ color: C.text }}>{stats.buts.n}</b> confrontation{stats.buts.n > 1 ? "s" : ""} (buts)</div>
+          <div>
+            total brute <b style={{ color: C.text }}>{stats.buts.moyenneTotal.toFixed(2)}</b> · pondérée récente{" "}
+            <b style={{ color: C.text }}>{stats.buts.moyennePondereeTotal.toFixed(2)}</b> · volatilité{" "}
+            <b style={{ color: C.text }}>±{stats.buts.volatiliteTotal.toFixed(2)}</b>
+          </div>
+          <div style={{ display: "flex", gap: 14 }}>
+            <span style={{ color: C.teamA }}>{teamAName || "A"} : {stats.buts.moyenneA.toFixed(2)} (pond. {stats.buts.moyennePondereeA.toFixed(2)})</span>
+            <span style={{ color: C.teamB }}>{teamBName || "B"} : {stats.buts.moyenneB.toFixed(2)} (pond. {stats.buts.moyennePondereeB.toFixed(2)})</span>
+          </div>
+          {(stats.buts.whenAHome || stats.buts.whenBHome) && (
+            <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 2, paddingTop: 5, display: "flex", flexDirection: "column", gap: 3 }}>
+              <span style={{ fontSize: 9.5, color: C.faint, fontFamily: FONT_BODY }}>
+                split domicile/extérieur (l'avantage du terrain compte, contrairement aux corners regroupés ci-dessus) :
+              </span>
+              {stats.buts.whenAHome && (
+                <span>
+                  quand <span style={{ color: C.teamA }}>{teamAName || "A"}</span> reçoit ({stats.buts.whenAHome.n}) : total{" "}
+                  <b style={{ color: C.text }}>{stats.buts.whenAHome.moyenneTotal.toFixed(2)}</b> ({stats.buts.whenAHome.moyenneA.toFixed(2)}-{stats.buts.whenAHome.moyenneB.toFixed(2)})
+                </span>
+              )}
+              {stats.buts.whenBHome && (
+                <span>
+                  quand <span style={{ color: C.teamB }}>{teamBName || "B"}</span> reçoit ({stats.buts.whenBHome.n}) : total{" "}
+                  <b style={{ color: C.text }}>{stats.buts.whenBHome.moyenneTotal.toFixed(2)}</b> ({stats.buts.whenBHome.moyenneA.toFixed(2)}-{stats.buts.whenBHome.moyenneB.toFixed(2)})
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {stats && stats.moyennePondereeTotal !== undefined && seasonProj && (
         <div
           style={{
             background: ecartNotable ? C.jouable + "18" : C.bg,
@@ -3097,6 +3279,9 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
         csB={effB.csButs}
         bttsA={effA.bttsButs}
         bttsB={effB.bttsButs}
+        attDangA={effA.attDangSeries}
+        attDangB={effB.attDangSeries}
+        leagueAvg={leagueAvg}
       />
 
       <SecondaryStatPanel
@@ -3123,6 +3308,8 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
         csB={statsBTotal.csButs}
         bttsA={statsATotal.bttsButs}
         bttsB={statsBTotal.bttsButs}
+        attDangA={statsATotal.attDangSeries}
+        attDangB={statsBTotal.attDangSeries}
         leagueAvg={leagueAvg}
       />
 
