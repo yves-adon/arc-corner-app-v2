@@ -30,6 +30,37 @@ function writeEloCache(key, data) {
   }
 }
 
+/* Retire les accents/diacritiques (é -> e, etc.) — ClubElo référence la plupart des
+   clubs SANS accent (ex : "Cartagines", pas "Cartaginés", comme la quasi-totalité des
+   sites de stats sauf Wikipedia), donc une recherche avec le nom accentué tel quel peut
+   échouer même quand le club existe bien dans leur base sous une forme simplifiée. */
+function stripDiacritics(str) {
+  return (str || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+async function fetchClubEloOnce(name) {
+  const res = await fetch(`/api/clubelo?team=${encodeURIComponent(name)}`);
+  if (!res.ok) throw new Error("ClubElo indisponible");
+  const text = await res.text();
+  const lines = text.trim().split("\n").filter(Boolean);
+  if (lines.length < 2) return null; // juste l'en-tête ou vide = club introuvable
+  const header = lines[0].split(",").map((h) => h.trim());
+  const lastRow = lines[lines.length - 1].split(",");
+  const get = (col) => {
+    const idx = header.indexOf(col);
+    return idx >= 0 ? lastRow[idx] : undefined;
+  };
+  const elo = parseFloat(get("Elo"));
+  if (!elo || Number.isNaN(elo)) return null;
+  return {
+    club: get("Club") || name,
+    country: get("Country") || "",
+    elo,
+    from: get("From") || "",
+    to: get("To") || "",
+  };
+}
+
 export async function fetchClubElo(teamName) {
   const name = (teamName || "").trim();
   if (!name) return null;
@@ -40,26 +71,14 @@ export async function fetchClubElo(teamName) {
   }
 
   try {
-    const res = await fetch(`/api/clubelo?team=${encodeURIComponent(name)}`);
-    if (!res.ok) throw new Error("ClubElo indisponible");
-    const text = await res.text();
-    const lines = text.trim().split("\n").filter(Boolean);
-    if (lines.length < 2) return null; // juste l'en-tête ou vide = club introuvable
-    const header = lines[0].split(",").map((h) => h.trim());
-    const lastRow = lines[lines.length - 1].split(",");
-    const get = (col) => {
-      const idx = header.indexOf(col);
-      return idx >= 0 ? lastRow[idx] : undefined;
-    };
-    const elo = parseFloat(get("Elo"));
-    if (!elo || Number.isNaN(elo)) return null;
-    const result = {
-      club: get("Club") || name,
-      country: get("Country") || "",
-      elo,
-      from: get("From") || "",
-      to: get("To") || "",
-    };
+    let result = await fetchClubEloOnce(name);
+    // repli automatique sans accents si le nom tel quel n'a rien donné — voir
+    // commentaire sur stripDiacritics ci-dessus
+    if (!result) {
+      const stripped = stripDiacritics(name);
+      if (stripped !== name) result = await fetchClubEloOnce(stripped);
+    }
+    if (!result) return null;
     writeEloCache(cacheKey, result);
     return { ...result, stale: false, fromCache: false };
   } catch (e) {
