@@ -730,7 +730,25 @@ function computeHistoryStats(matches, alpha = 0.25, includeAdvanced = true) {
   };
 }
 
-const emptyTeam = () => ({ nom: "", obtenus: "", concedes: "", part: "", ewma: "", mode: "moyennes", matches: [], useAdvanced: false, excludedLigues: [] });
+const emptyTeam = () => ({ nom: "", obtenus: "", concedes: "", part: "", ewma: "", mode: "moyennes", matches: [], useAdvanced: false, excludedLigues: [], limitRecent: false, recentCount: 10 });
+
+/* Filtre compétitions + limite optionnelle aux N matchs les plus récents — utilisé
+   partout où une équipe est analysée (profil solo, comparateur), pour ne jamais avoir
+   deux endroits qui filtrent différemment. Le tableau `matches` est toujours trié plus
+   récent en premier (nouvelle entrée ajoutée en tête, cf `setMatches([nouveau,
+   ...matches])` utilisé partout dans l'appli), donc "N plus récents" = les N premiers
+   éléments UNE FOIS les compétitions exclues retirées — pas avant — pour que la limite
+   porte sur les matchs réellement pertinents, pas sur un mélange qui inclurait des
+   matchs d'une compétition que tu as justement décidé d'ignorer. */
+function applyMatchFilters(team) {
+  const excludedLigues = team.excludedLigues || [];
+  let matches = excludedLigues.length ? team.matches.filter((m) => !excludedLigues.includes(m.ligue || "(non identifiée)")) : team.matches;
+  if (team.limitRecent) {
+    const n = Math.max(1, Math.round(num(team.recentCount)) || 10);
+    matches = matches.slice(0, n);
+  }
+  return matches;
+}
 
 /* choisit les stats les plus pertinentes pour CE match : d'abord le sous-ensemble
    domicile/extérieur si assez de matchs tagués (>= minN), sinon tout l'historique,
@@ -1377,7 +1395,7 @@ function PdfExtractTotalCorner({ teamName, color, onImport, onTeamNameDetected }
   );
 }
 
-function MatchHistoryRows({ matches, setMatches, color, teamName, useAdvanced, onToggleAdvanced, excludedLigues, onToggleLigue, onTeamNameDetected }) {
+function MatchHistoryRows({ matches, setMatches, color, teamName, useAdvanced, onToggleAdvanced, excludedLigues, onToggleLigue, onTeamNameDetected, limitRecent, recentCount, onToggleRecent, onChangeRecentCount }) {
   const update = (id, next) => setMatches(matches.map((m) => (m.id === id ? next : m)));
   const remove = (id) => setMatches(matches.filter((m) => m.id !== id));
   // liste dynamique des compétitions présentes dans CET historique — comme le filtre de
@@ -1412,6 +1430,35 @@ function MatchHistoryRows({ matches, setMatches, color, teamName, useAdvanced, o
       >
         {useAdvanced ? "✓ activé" : "+ activer"} tirs, att. dangereuses & corners par mi-temps (optionnel)
       </button>
+      {matches.length > 10 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <button
+            onClick={onToggleRecent}
+            title={
+              limitRecent
+                ? "Désactive la limite (recalcule sur tout l'historique saisi, toutes saisons confondues)"
+                : "Limite le calcul aux matchs les plus récents — évite de mélanger la saison en cours avec une saison précédente"
+            }
+            style={{
+              fontSize: 10,
+              color: limitRecent ? color : C.faint,
+              background: limitRecent ? color + "18" : "transparent",
+              border: `1px ${limitRecent ? "solid" : "dashed"} ${limitRecent ? color + "55" : C.line}`,
+              borderRadius: 6,
+              padding: "2px 6px",
+              cursor: "pointer",
+            }}
+          >
+            {limitRecent ? "✓ activé" : "+ activer"} limiter aux N derniers matchs
+          </button>
+          {limitRecent && (
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <NumInput value={recentCount} onChange={onChangeRecentCount} placeholder="10" accent={color} />
+              <span style={{ fontSize: 10, color: C.faint }}>matchs (sur {matches.length} saisis)</span>
+            </div>
+          )}
+        </div>
+      )}
       {ligueList.length > 1 && (
         <div style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 8, padding: 8, display: "flex", flexDirection: "column", gap: 5 }}>
           <div style={{ fontSize: 10, color: C.faint }}>compétitions à inclure dans le calcul :</div>
@@ -1553,7 +1600,7 @@ function TeamProfileForm({ team, setTeam, color, label }) {
   // filtre compétition : appliqué UNIQUEMENT au calcul, la liste des matchs reste
   // visible/éditable en entier quel que soit le filtre choisi
   const excludedLigues = team.excludedLigues || [];
-  const filteredMatches = excludedLigues.length ? team.matches.filter((m) => !excludedLigues.includes(m.ligue || "(non identifiée)")) : team.matches;
+  const filteredMatches = applyMatchFilters(team);
   const toggleLigue = (name) =>
     setTeam({ ...team, excludedLigues: excludedLigues.includes(name) ? excludedLigues.filter((l) => l !== name) : [...excludedLigues, name] });
   const stats = computeHistoryStats(filteredMatches, 0.25, !!team.useAdvanced);
@@ -1617,10 +1664,21 @@ function TeamProfileForm({ team, setTeam, color, label }) {
             excludedLigues={excludedLigues}
             onToggleLigue={toggleLigue}
             onTeamNameDetected={(nom) => setTeam((prev) => ({ ...prev, nom }))}
+            limitRecent={!!team.limitRecent}
+            recentCount={team.recentCount ?? 10}
+            onToggleRecent={() => setTeam({ ...team, limitRecent: !team.limitRecent })}
+            onChangeRecentCount={(v) => setTeam({ ...team, recentCount: v })}
           />
           {stats ? (
             <div style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 8, padding: 10, fontFamily: FONT_MONO, fontSize: 11.5, color: C.dim, display: "flex", flexDirection: "column", gap: 3 }}>
-              <div>Calculé sur <b style={{ color: C.text }}>{stats.n}</b> match{stats.n > 1 ? "s" : ""} <span style={{ color: C.faint }}>(tous lieux confondus{excludedLigues.length ? ` · ${excludedLigues.length} compétition${excludedLigues.length > 1 ? "s" : ""} exclue${excludedLigues.length > 1 ? "s" : ""}` : ""})</span></div>
+              <div>
+                Calculé sur <b style={{ color: C.text }}>{stats.n}</b> match{stats.n > 1 ? "s" : ""}{" "}
+                <span style={{ color: C.faint }}>
+                  (tous lieux confondus
+                  {excludedLigues.length ? ` · ${excludedLigues.length} compétition${excludedLigues.length > 1 ? "s" : ""} exclue${excludedLigues.length > 1 ? "s" : ""}` : ""}
+                  {team.limitRecent ? ` · limité aux ${team.recentCount ?? 10} plus récents` : ""})
+                </span>
+              </div>
               <div>moyenne obtenus <b style={{ color: C.text }}>{stats.moyObtenus.toFixed(2)}</b> · concédés <b style={{ color: C.text }}>{stats.moyConcedes.toFixed(2)}</b></div>
               <div>part des corners <b style={{ color: C.text }}>{stats.part.toFixed(0)}%</b> · EWMA <b style={{ color: C.text }}>{stats.ewma >= 0 ? "+" : ""}{stats.ewma.toFixed(2)}</b></div>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -2910,11 +2968,7 @@ function H2hSection({ h2h, setH2h, teamAName, teamBName, seasonProj }) {
 function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, individuels, setIndividuels, h2h, setH2h, onAddBet }) {
   // même filtre compétition que dans le profil solo — appliqué ici aussi pour que le
   // duel reste cohérent avec ce que l'utilisateur a choisi de regarder par équipe
-  const filterMatches = (team) => {
-    const excludedLigues = team.excludedLigues || [];
-    if (!excludedLigues.length) return team;
-    return { ...team, matches: team.matches.filter((m) => !excludedLigues.includes(m.ligue || "(non identifiée)")) };
-  };
+  const filterMatches = (team) => ({ ...team, matches: applyMatchFilters(team) });
   const effA = pickVenueStats(filterMatches(teamA), "D");
   const effB = pickVenueStats(filterMatches(teamB), "E");
   // stats tous lieux confondus (pas de filtre domicile/extérieur) — pour le panneau
