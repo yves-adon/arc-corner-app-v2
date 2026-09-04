@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   Plus, Trash2, Check, X, Minus, RotateCcw, Target,
-  ClipboardList, BarChart3, Flag, Loader2, ArrowRightLeft
+  ClipboardList, BarChart3, Flag, Loader2, ArrowRightLeft, Camera
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
@@ -199,11 +199,12 @@ function computeFormeProb(rcA, rcB, pDrawAnchor) {
   const shareA = 1 / (1 + Math.exp(-1.1 * delta));
   return { pA: shareA * remaining, pDraw, pB: (1 - shareA) * remaining };
 }
-function combineWinProbs({ h2h, poisson, forme }) {
+function combineWinProbs({ h2h, poisson, forme, menace }) {
   const entries = [
-    { key: "h2h", label: "H2H", data: h2h, weight: 0.35 },
-    { key: "poisson", label: "Buts (Poisson)", data: poisson, weight: 0.45 },
-    { key: "forme", label: "Forme (RC)", data: forme, weight: 0.2 },
+    { key: "h2h", label: "H2H", data: h2h, weight: 0.3 },
+    { key: "poisson", label: "Buts (Poisson)", data: poisson, weight: 0.35 },
+    { key: "menace", label: "Attaques dangereuses", data: menace, weight: 0.2 },
+    { key: "forme", label: "Forme (RC)", data: forme, weight: 0.15 },
   ].filter((e) => e.data);
   if (!entries.length) return null;
   const totalWeight = entries.reduce((s, e) => s + e.weight, 0);
@@ -241,11 +242,12 @@ function WinProbAxisRow({ label, data, teamAName, teamBName, detail }) {
   );
 }
 
-function WinProbabilitySection({ h2h, poisson, forme, combined, teamAName, teamBName }) {
+function WinProbabilitySection({ h2h, poisson, forme, menace, combined, convAttDangA, convAttDangB, teamAName, teamBName }) {
   if (!combined) return null;
+  const hasConv = convAttDangA !== null && convAttDangA !== undefined && convAttDangB !== null && convAttDangB !== undefined;
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
-      <SectionTitle sub="H2H + buts (Poisson) + forme · expérimental">Probabilité de victoire normalisée</SectionTitle>
+      <SectionTitle sub="H2H + buts (Poisson) + attaques dangereuses + forme · expérimental">Probabilité de victoire normalisée</SectionTitle>
       <div style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 8, padding: 10 }}>
         <ThreeWayBar
           pctVic={combined.pA * 100}
@@ -260,12 +262,39 @@ function WinProbabilitySection({ h2h, poisson, forme, combined, teamAName, teamB
       <div style={{ display: "flex", flexDirection: "column", gap: 8, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
         <WinProbAxisRow label="H2H (confrontations directes)" data={h2h} teamAName={teamAName} teamBName={teamBName} detail={h2h ? `${h2h.n} confront.` : null} />
         <WinProbAxisRow label="Buts (Poisson)" data={poisson} teamAName={teamAName} teamBName={teamBName} />
+        <WinProbAxisRow label="Attaques dangereuses (volume × conversion)" data={menace} teamAName={teamAName} teamBName={teamBName} />
         <WinProbAxisRow label="Forme (Ratio Cumulé)" data={forme} teamAName={teamAName} teamBName={teamBName} />
       </div>
+      {hasConv && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
+          <div style={{ fontSize: 10.5, color: C.faint }}>Buts par attaque dangereuse (conversion)</div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontFamily: FONT_MONO, fontSize: 13 }}>
+            <span style={{ color: C.teamA, fontWeight: 700 }}>
+              {teamAName || "Équipe A"} : {convAttDangA.toFixed(3)}
+            </span>
+            <span style={{ color: C.teamB, fontWeight: 700 }}>
+              {teamBName || "Équipe B"} : {convAttDangB.toFixed(3)}
+            </span>
+          </div>
+          <SplitBar
+            left={convAttDangA}
+            right={convAttDangB}
+            colorLeft={C.teamA}
+            colorRight={C.teamB}
+            labelLeft={`${(convAttDangA * 100).toFixed(1)}%`}
+            labelRight={`${(convAttDangB * 100).toFixed(1)}%`}
+          />
+          <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic" }}>
+            buts marqués / attaque dangereuse créée — une équipe peut générer beaucoup de danger sans concrétiser,
+            d'où l'axe ci-dessus qui pondère le VOLUME d'attaques par ce taux plutôt que de ne compter que les buts.
+          </div>
+        </div>
+      )}
       <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic" }}>
-        Moyenne pondérée (45% buts / 35% H2H / 20% forme, renormalisée selon les axes disponibles) — pas backtestée,
-        à recouper avec les autres panneaux plutôt qu'à suivre seule. Le nul de l'axe Forme est calé sur celui du
-        modèle Poisson (pas un 3e modèle de nul indépendant).
+        Moyenne pondérée (35% buts / 30% H2H / 20% attaques dangereuses / 15% forme, renormalisée selon les axes
+        disponibles) — pas backtestée, à recouper avec les autres panneaux plutôt qu'à suivre seule. Le nul de
+        l'axe Forme est calé sur celui du modèle Poisson (pas un modèle de nul indépendant) ; les axes Buts et
+        Attaques dangereuses ont chacun leur propre nul, calculé indépendamment.
       </div>
     </div>
   );
@@ -2814,6 +2843,224 @@ function computeH2hStats(matches, alpha = 0.25) {
   return { ...corners, buts };
 }
 
+/* ---------------------------------------------------------------
+   EXTRACTION H2H DEPUIS UNE PHOTO — OCR LOCAL (Tesseract.js), EXPÉRIMENTAL
+   ---------------------------------------------------------------
+   Alternative à "Extraction auto" (collage de texte) pour les tableaux "Face-à-
+   face" de type Forebet/SofaScore : l'utilisateur prend une photo au lieu de
+   copier-coller. Tourne ENTIÈREMENT dans le navigateur (aucun serveur, aucune
+   clé API) — moins fiable que le collage de texte car ça passe par de la
+   reconnaissance d'image, donc à toujours vérifier avant de faire confiance
+   aux chiffres importés (comme le rappelle systématiquement l'app pour les
+   autres extractions auto).
+
+   Tesseract.js n'est PAS une dépendance npm du projet ici (pour rester sur un
+   seul fichier à modifier) : il est chargé à la demande depuis un CDN, la
+   première fois que l'utilisateur utilise cette fonction. Ça veut dire qu'une
+   connexion internet est nécessaire au moment de l'extraction (mais pas pour
+   le reste de l'app).
+
+   Principe en 3 étapes :
+   1) OCR mot par mot (avec position x/y de chaque mot, pas juste le texte
+      brut) — nécessaire car un tableau a plusieurs colonnes, et Tesseract ne
+      les lit pas forcément dans le bon ordre s'il ne se base que sur ses
+      propres blocs de texte.
+   2) Reconstruction des LIGNES du tableau en regroupant les mots par bande
+      verticale (y proche), puis en les triant par x pour retrouver l'ordre
+      de lecture gauche→droite. Les sites comme Forebet affichent la date sur
+      deux lignes (jour/mois puis année) à côté d'une ligne "équipe – score –
+      équipe" sur une seule ligne : la ligne "année" (uniquement des chiffres/
+      parenthèses) est donc rattachée à la ligne précédente plutôt que traitée
+      comme une ligne à part.
+   3) Sur chaque ligne reconstruite, recherche du score "X - Y" (en ignorant
+      la mi-temps entre parenthèses), puis identification de quelle équipe
+      (A ou B, par mot-clé de nom) apparaît avant / après ce score. Une ligne
+      où les deux noms ne sont pas retrouvés est laissée de côté et affichée
+      en clair pour saisie manuelle, plutôt que silencieusement ignorée.
+   Domicile/extérieur n'est PAS déduit de la photo (le gras n'est pas fiable en
+   OCR) — les matchs importés ainsi ont "home" non renseigné, comme le format
+   "corners" classique du collage en vrac. */
+
+let tesseractLoadPromise = null;
+function loadTesseract() {
+  if (window.Tesseract) return Promise.resolve(window.Tesseract);
+  if (tesseractLoadPromise) return tesseractLoadPromise;
+  tesseractLoadPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
+    script.async = true;
+    script.onload = () => (window.Tesseract ? resolve(window.Tesseract) : reject(new Error("Tesseract indisponible après chargement")));
+    script.onerror = () => reject(new Error("Impossible de charger Tesseract.js (vérifie ta connexion internet)"));
+    document.head.appendChild(script);
+  });
+  return tesseractLoadPromise;
+}
+
+// Regroupe les mots OCR (avec bbox {x0,y0,x1,y1}) en lignes de tableau par
+// proximité verticale, puis trie chaque ligne par x. Un mot rejoint la ligne en
+// cours si son centre y est à moins de 70% de la hauteur de mot la plus haute
+// (la sienne ou celle de la ligne) — sinon il démarre une nouvelle ligne.
+function clusterOcrRows(words) {
+  const items = (words || [])
+    .filter((w) => w.text && w.text.trim())
+    .map((w) => ({ text: w.text.trim(), x0: w.bbox.x0, cy: (w.bbox.y0 + w.bbox.y1) / 2, h: w.bbox.y1 - w.bbox.y0 }))
+    .sort((a, b) => a.cy - b.cy);
+  const rows = [];
+  for (const w of items) {
+    const row = rows.find((r) => Math.abs(r.cy - w.cy) < Math.max(r.h, w.h, 8) * 0.7);
+    if (row) {
+      row.words.push(w);
+      row.cy = (row.cy * (row.words.length - 1) + w.cy) / row.words.length;
+      row.h = Math.max(row.h, w.h);
+    } else {
+      rows.push({ cy: w.cy, h: w.h, words: [w] });
+    }
+  }
+  rows.sort((a, b) => a.cy - b.cy);
+  return rows.map((r) =>
+    r.words
+      .sort((a, b) => a.x0 - b.x0)
+      .map((w) => w.text)
+      .join(" ")
+  );
+}
+
+// Rattache à la ligne précédente toute ligne "uniquement chiffres/parenthèses/
+// tirets" (ex. une année seule "2026", ou une mi-temps seule "(0 - 0)") — c'est
+// le repli de la ligne date/mi-temps qui, sur deux sous-lignes dans l'image,
+// finit dans un cluster séparé au lieu de la ligne "équipe - score - équipe".
+function mergeContinuationRows(rowTexts) {
+  const merged = [];
+  for (const t of rowTexts) {
+    const isContinuation = /^[\d\s().-]+$/.test(t) && merged.length > 0;
+    if (isContinuation) merged[merged.length - 1] += " " + t;
+    else merged.push(t);
+  }
+  return merged;
+}
+
+function parsePhotoH2hRows(rowTexts, teamAName, teamBName) {
+  const aWord = (teamAName || "").trim().toLowerCase().split(/\s+/).find((w) => w.length >= 3) || "";
+  const bWord = (teamBName || "").trim().toLowerCase().split(/\s+/).find((w) => w.length >= 3) || "";
+  const results = [];
+  const skipped = [];
+  if (!aWord || !bWord) return { results, skipped: rowTexts };
+
+  for (const raw of rowTexts) {
+    // retire la mi-temps entre parenthèses pour ne pas la confondre avec le score
+    const withoutHalf = raw.replace(/\([^)]*\)/g, " ");
+    const scoreMatch = withoutHalf.match(/(\d+)\s*-\s*(\d+)/);
+    if (!scoreMatch || scoreMatch.index === undefined) continue; // pas une ligne de match (titre, légende...)
+
+    const before = withoutHalf.slice(0, scoreMatch.index).toLowerCase();
+    const after = withoutHalf.slice(scoreMatch.index + scoreMatch[0].length).toLowerCase();
+    const leftGoals = scoreMatch[1];
+    const rightGoals = scoreMatch[2];
+
+    const aLeft = before.includes(aWord);
+    const bLeft = before.includes(bWord);
+    const aRight = after.includes(aWord);
+    const bRight = after.includes(bWord);
+
+    let butsA = null, butsB = null;
+    if (aLeft && bRight) { butsA = leftGoals; butsB = rightGoals; }
+    else if (bLeft && aRight) { butsA = rightGoals; butsB = leftGoals; }
+
+    if (butsA === null) { skipped.push(raw); continue; }
+
+    // date en 2 morceaux ("19.04" puis "2026" plus loin sur la ligne fusionnée, pas
+    // forcément adjacents une fois la ligne de continuation recollée en fin de chaîne)
+    const dmMatch = raw.match(/\b(\d{2})[.\/](\d{2})\b/);
+    const yearMatch = raw.match(/\b(19|20)\d{2}\b/);
+    const dateStr = dmMatch && yearMatch ? `${dmMatch[1]}/${dmMatch[2]}/${yearMatch[0]}` : "";
+    results.push({
+      id: uid(),
+      obtenusA: "",
+      obtenusB: "",
+      home: null,
+      butsA,
+      butsB,
+      date: dateStr,
+    });
+  }
+  return { results, skipped };
+}
+
+function PhotoExtractH2h({ teamAName, teamBName, onImport }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
+  const [skipped, setSkipped] = useState([]);
+
+  const handleFile = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = ""; // permet de re-sélectionner la même photo ensuite
+    if (!file) return;
+    if (!teamAName || !teamAName.trim() || !teamBName || !teamBName.trim()) {
+      setError("Renseigne d'abord les deux noms d'équipe ci-dessus (pour identifier les bonnes lignes).");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setInfo("");
+    setSkipped([]);
+    try {
+      const Tesseract = await loadTesseract();
+      const { data } = await Tesseract.recognize(file, "eng");
+      const words = data && data.words ? data.words : [];
+      if (!words.length) {
+        setError("Aucun texte détecté sur la photo — réessaie avec une image plus nette ou mieux cadrée.");
+        return;
+      }
+      const rows = mergeContinuationRows(clusterOcrRows(words));
+      const { results, skipped: notMatched } = parsePhotoH2hRows(rows, teamAName, teamBName);
+      if (!results.length) {
+        setError(
+          `Aucune confrontation reconnue entre "${teamAName}" et "${teamBName}" sur cette photo — vérifie le cadrage, ou utilise "Extraction auto" (collage de texte) à la place.`
+        );
+        setSkipped(notMatched);
+        return;
+      }
+      onImport(results);
+      setInfo(`${results.length} confrontation${results.length > 1 ? "s" : ""} importée${results.length > 1 ? "s" : ""} depuis la photo${notMatched.length ? ` · ${notMatched.length} ligne(s) non reconnue(s) ci-dessous` : ""}. OCR = pas fiable à 100%, vérifie chaque score avant de t'y fier.`);
+      setSkipped(notMatched);
+    } catch (err) {
+      setError(err && err.message ? err.message : "Erreur pendant l'extraction de la photo.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <label
+        style={{
+          fontSize: 10.5, color: C.dim, background: "transparent", border: `1px solid ${C.line}`, borderRadius: 6,
+          padding: "3px 8px", cursor: busy ? "default" : "pointer", display: "inline-flex", alignItems: "center", gap: 4,
+        }}
+      >
+        {busy ? <Loader2 size={12} className="animate-spin" /> : <Camera size={12} />}
+        {busy ? "Lecture de la photo…" : "Extraire depuis une photo"}
+        <input type="file" accept="image/*" capture="environment" onChange={handleFile} disabled={busy} style={{ display: "none" }} />
+      </label>
+      {error && <div style={{ fontSize: 11, color: C.fragile, maxWidth: 260 }}>{error}</div>}
+      {info && <div style={{ fontSize: 11, color: C.jouable, maxWidth: 260 }}>{info}</div>}
+      {skipped.length > 0 && (
+        <div style={{ fontSize: 10, color: C.faint, maxWidth: 260, lineHeight: 1.4 }}>
+          Non reconnu(es), à ajouter à la main si utile :
+          <br />
+          {skipped.map((s, i) => (
+            <span key={i}>
+              « {s} »
+              <br />
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RawExtractH2h({ teamAName, teamBName, onImport }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
@@ -2963,6 +3210,7 @@ function H2hSection({ h2h, setH2h, teamAName, teamBName, seasonProj }) {
           </div>
         )}
         <RawExtractH2h teamAName={teamAName} teamBName={teamBName} onImport={(parsed) => setH2h([...parsed, ...h2h])} />
+        <PhotoExtractH2h teamAName={teamAName} teamBName={teamBName} onImport={(parsed) => setH2h([...parsed, ...h2h])} />
       </div>
 
       {h2h.length > 0 && (
@@ -3207,6 +3455,16 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
   const ligneVenue = butsProjVenue ? nearestHalfLine(butsProjVenue.total) : null;
   const ligneGlobal = butsProjGlobal ? nearestHalfLine(butsProjGlobal.total) : null;
 
+  // Même logique que la projection de buts, mais sur le VOLUME d'attaques dangereuses —
+  // sert à la fois au panneau "Attaques dangereuses" existant et au nouvel axe de menace
+  // ci-dessous (winProbMenace), qui pondère ce volume par le taux de conversion réel.
+  const attDangProjVenue = effA.attDangSeries && effB.attDangSeries
+    ? projection(effA.attDangSeries.moyObtenus, effB.attDangSeries.moyConcedes, effB.attDangSeries.moyObtenus, effA.attDangSeries.moyConcedes)
+    : null;
+  const attDangProjGlobal = statsATotal.attDangSeries && statsBTotal.attDangSeries
+    ? projection(statsATotal.attDangSeries.moyObtenus, statsBTotal.attDangSeries.moyConcedes, statsBTotal.attDangSeries.moyObtenus, statsATotal.attDangSeries.moyConcedes)
+    : null;
+
   const ouDynVenueA = ligneVenue !== null ? computeOverUnder(teamAForVenueOU, "butsObtenus", "butsConcedes", ligneVenue) : null;
   const ouDynVenueB = ligneVenue !== null ? computeOverUnder(teamBForVenueOU, "butsObtenus", "butsConcedes", ligneVenue) : null;
   const ouDynGlobalA = ligneGlobal !== null ? computeOverUnder(teamAAllMatches, "butsObtenus", "butsConcedes", ligneGlobal) : null;
@@ -3239,7 +3497,26 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
     ? computeRatioCumule({ projSide: winProbProj?.projB, projOther: winProbProj?.projA, ewma: winProbSeriesB.ewma, vol: winProbSeriesB.volatilite, part: winProbSeriesB.part })
     : null;
   const winProbForme = computeFormeProb(winProbRcA, winProbRcB, winProbPoisson ? winProbPoisson.pDraw : null);
-  const winProbCombined = combineWinProbs({ h2h: winProbH2h, poisson: winProbPoisson, forme: winProbForme });
+
+  // Axe "Menace" (attaques dangereuses) — le volume brut d'attaques dangereuses compte
+  // même sans concrétisation (comme demandé), mais est pondéré par le taux de conversion
+  // réel de chaque équipe (buts marqués / attaque dangereuse créée) pour donner un "volume
+  // de danger pondéré par l'efficacité" comparable à une projection de buts. Repasse par
+  // le même modèle Poisson que l'axe Buts, avec son propre nul (indépendant, pas calé sur
+  // l'axe Buts) puisque volume × conversion est une vraie estimation de buts attendus.
+  const attDangProj = attDangProjVenue || attDangProjGlobal;
+  const attDangSeriesA = attDangProjVenue ? effA.attDangSeries : statsATotal.attDangSeries;
+  const attDangSeriesB = attDangProjVenue ? effB.attDangSeries : statsBTotal.attDangSeries;
+  const convButsSeriesA = attDangProjVenue ? effA.butsSeries : statsATotal.butsSeries;
+  const convButsSeriesB = attDangProjVenue ? effB.butsSeries : statsBTotal.butsSeries;
+  const convAttDangA = convButsSeriesA && attDangSeriesA && attDangSeriesA.moyObtenus > 0 ? convButsSeriesA.moyObtenus / attDangSeriesA.moyObtenus : null;
+  const convAttDangB = convButsSeriesB && attDangSeriesB && attDangSeriesB.moyObtenus > 0 ? convButsSeriesB.moyObtenus / attDangSeriesB.moyObtenus : null;
+  const menaceA = attDangProj && convAttDangA !== null ? attDangProj.projA * convAttDangA : null;
+  const menaceB = attDangProj && convAttDangB !== null ? attDangProj.projB * convAttDangB : null;
+  const winProbMenace = menaceA !== null && menaceB !== null ? computePoissonMatch(menaceA, menaceB) : null;
+
+  const winProbCombined = combineWinProbs({ h2h: winProbH2h, poisson: winProbPoisson, forme: winProbForme, menace: winProbMenace });
+
 
   /* Prédiction expérimentale : utilise la corrélation historique propre à chaque
      équipe (total corners de ses matchs vs total tirs/att. dangereuses de ces mêmes
@@ -3375,7 +3652,10 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
         h2h={winProbH2h}
         poisson={winProbPoisson}
         forme={winProbForme}
+        menace={winProbMenace}
         combined={winProbCombined}
+        convAttDangA={convAttDangA}
+        convAttDangB={convAttDangB}
         teamAName={teamA.nom}
         teamBName={teamB.nom}
       />
