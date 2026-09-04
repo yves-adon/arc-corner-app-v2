@@ -142,6 +142,135 @@ function computeRatioCumule({ projSide, projOther, ewma, vol, part }) {
   return { ratioProjection, ratioForme, ratioPart, rc: ratioProjection + ratioForme + ratioPart };
 }
 
+/* ---------------------------------------------------------------
+   PROBABILITÉ DE VICTOIRE NORMALISÉE (1X2) — EXPÉRIMENTAL
+   ---------------------------------------------------------------
+   Combine 3 lectures indépendantes déjà présentes ailleurs dans l'app en UNE
+   probabilité normalisée par équipe (+ nul), au lieu de laisser recouper 3
+   chiffres à la main :
+   1) H2H — fréquence de victoire RÉELLE (comptage brut, pas une moyenne) sur
+      les confrontations directes déjà saisies dans la section H2H.
+   2) Buts (Poisson) — matrice de score à partir de la même projection de
+      buts que le reste de l'app (projection() sur les moyennes obtenus/
+      concédés), modèle Poisson indépendant standard.
+   3) Forme (RC) — le Ratio Cumulé déjà calculé ailleurs (EWMA, volatilité,
+      part), converti en écart A vs B. Cet axe n'a pas de notion de nul
+      propre : son nul est calé sur celui du modèle Poisson, donc ce n'est
+      qu'un ajustement du partage A/B, pas un 3e modèle de nul indépendant.
+   Comme pour le RC, les 3 lectures restent affichées séparément — la moyenne
+   pondérée n'est qu'une synthèse, jamais la seule chose montrée, pour rester
+   auditable. Poids par défaut : 45% buts, 35% H2H, 20% forme, renormalisés
+   si un axe manque (ex. H2H indisponible sous 3 confrontations). Aucun poids
+   n'a été backtesté — comme le RC, à ajuster une fois qu'il y a des données
+   de suivi (Bilan). */
+function computeH2hWinProb(h2h) {
+  const valid = (h2h || []).filter(
+    (m) => m.butsA !== "" && m.butsA !== undefined && m.butsA !== null && m.butsB !== "" && m.butsB !== undefined && m.butsB !== null
+  );
+  const n = valid.length;
+  if (n < 3) return null;
+  const winsA = valid.filter((m) => num(m.butsA) > num(m.butsB)).length;
+  const winsB = valid.filter((m) => num(m.butsB) > num(m.butsA)).length;
+  const draws = n - winsA - winsB;
+  return { n, pA: winsA / n, pDraw: draws / n, pB: winsB / n };
+}
+function computePoissonMatch(projA, projB, maxGoals = 8) {
+  if (projA === null || projA === undefined || projB === null || projB === undefined || isNaN(projA) || isNaN(projB)) return null;
+  const a = Math.max(projA, 0.05);
+  const b = Math.max(projB, 0.05);
+  let pA = 0, pDraw = 0, pB = 0;
+  for (let i = 0; i <= maxGoals; i++) {
+    for (let j = 0; j <= maxGoals; j++) {
+      const p = poissonPmf(i, a) * poissonPmf(j, b);
+      if (i > j) pA += p;
+      else if (i === j) pDraw += p;
+      else pB += p;
+    }
+  }
+  const total = pA + pDraw + pB;
+  if (total <= 0) return null;
+  return { pA: pA / total, pDraw: pDraw / total, pB: pB / total };
+}
+function computeFormeProb(rcA, rcB, pDrawAnchor) {
+  if (!rcA || !rcB) return null;
+  const delta = rcA.rc - rcB.rc;
+  const pDraw = pDrawAnchor !== null && pDrawAnchor !== undefined ? pDrawAnchor : 0.24;
+  const remaining = 1 - pDraw;
+  const shareA = 1 / (1 + Math.exp(-1.1 * delta));
+  return { pA: shareA * remaining, pDraw, pB: (1 - shareA) * remaining };
+}
+function combineWinProbs({ h2h, poisson, forme }) {
+  const entries = [
+    { key: "h2h", label: "H2H", data: h2h, weight: 0.35 },
+    { key: "poisson", label: "Buts (Poisson)", data: poisson, weight: 0.45 },
+    { key: "forme", label: "Forme (RC)", data: forme, weight: 0.2 },
+  ].filter((e) => e.data);
+  if (!entries.length) return null;
+  const totalWeight = entries.reduce((s, e) => s + e.weight, 0);
+  const pA = entries.reduce((s, e) => s + e.data.pA * e.weight, 0) / totalWeight;
+  const pDraw = entries.reduce((s, e) => s + e.data.pDraw * e.weight, 0) / totalWeight;
+  const pB = entries.reduce((s, e) => s + e.data.pB * e.weight, 0) / totalWeight;
+  const sum = pA + pDraw + pB || 1;
+  return { pA: pA / sum, pDraw: pDraw / sum, pB: pB / sum, usedKeys: entries.map((e) => e.key) };
+}
+
+/* Une ligne = une lecture (H2H / Buts / Forme) : petite barre 3 voies + label,
+   ou message "indisponible" si les données manquent — pour que la synthèse
+   ci-dessus reste vérifiable au lieu d'être une boîte noire. */
+function WinProbAxisRow({ label, data, teamAName, teamBName, detail }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      <div style={{ fontSize: 10.5, color: C.faint, display: "flex", justifyContent: "space-between" }}>
+        <span>{label}</span>
+        {detail && <span style={{ fontFamily: FONT_MONO }}>{detail}</span>}
+      </div>
+      {data ? (
+        <ThreeWayBar
+          pctVic={data.pA * 100}
+          pctNul={data.pDraw * 100}
+          pctDef={data.pB * 100}
+          labelVic={teamAName || "Équipe A"}
+          labelDef={teamBName || "Équipe B"}
+          colorVic={C.teamA}
+          colorDef={C.teamB}
+        />
+      ) : (
+        <div style={{ fontSize: 10.5, color: C.faint, fontStyle: "italic" }}>indisponible</div>
+      )}
+    </div>
+  );
+}
+
+function WinProbabilitySection({ h2h, poisson, forme, combined, teamAName, teamBName }) {
+  if (!combined) return null;
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+      <SectionTitle sub="H2H + buts (Poisson) + forme · expérimental">Probabilité de victoire normalisée</SectionTitle>
+      <div style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 8, padding: 10 }}>
+        <ThreeWayBar
+          pctVic={combined.pA * 100}
+          pctNul={combined.pDraw * 100}
+          pctDef={combined.pB * 100}
+          labelVic={teamAName || "Équipe A"}
+          labelDef={teamBName || "Équipe B"}
+          colorVic={C.teamA}
+          colorDef={C.teamB}
+        />
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
+        <WinProbAxisRow label="H2H (confrontations directes)" data={h2h} teamAName={teamAName} teamBName={teamBName} detail={h2h ? `${h2h.n} confront.` : null} />
+        <WinProbAxisRow label="Buts (Poisson)" data={poisson} teamAName={teamAName} teamBName={teamBName} />
+        <WinProbAxisRow label="Forme (Ratio Cumulé)" data={forme} teamAName={teamAName} teamBName={teamBName} />
+      </div>
+      <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic" }}>
+        Moyenne pondérée (45% buts / 35% H2H / 20% forme, renormalisée selon les axes disponibles) — pas backtestée,
+        à recouper avec les autres panneaux plutôt qu'à suivre seule. Le nul de l'axe Forme est calé sur celui du
+        modèle Poisson (pas un 3e modèle de nul indépendant).
+      </div>
+    </div>
+  );
+}
+
 function impliedProb(cote) {
   const c = parseFloat(cote);
   if (!c || c <= 1) return null;
@@ -3095,6 +3224,23 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
   const h2hStats = computeH2hStats(h2h);
   const h2hReady = h2hStats && h2hStats.n >= 3;
 
+  // Probabilité de victoire normalisée (1X2) — voir le commentaire au-dessus de
+  // combineWinProbs pour le détail. Préfère la projection domicile/extérieur (comme le
+  // reste du duel) et ne retombe sur "tous lieux confondus" que si elle est indisponible.
+  const winProbProj = butsProjVenue || butsProjGlobal;
+  const winProbSeriesA = butsProjVenue ? effA.butsSeries : statsATotal.butsSeries;
+  const winProbSeriesB = butsProjVenue ? effB.butsSeries : statsBTotal.butsSeries;
+  const winProbH2h = computeH2hWinProb(h2h);
+  const winProbPoisson = winProbProj ? computePoissonMatch(winProbProj.projA, winProbProj.projB) : null;
+  const winProbRcA = winProbSeriesA
+    ? computeRatioCumule({ projSide: winProbProj?.projA, projOther: winProbProj?.projB, ewma: winProbSeriesA.ewma, vol: winProbSeriesA.volatilite, part: winProbSeriesA.part })
+    : null;
+  const winProbRcB = winProbSeriesB
+    ? computeRatioCumule({ projSide: winProbProj?.projB, projOther: winProbProj?.projA, ewma: winProbSeriesB.ewma, vol: winProbSeriesB.volatilite, part: winProbSeriesB.part })
+    : null;
+  const winProbForme = computeFormeProb(winProbRcA, winProbRcB, winProbPoisson ? winProbPoisson.pDraw : null);
+  const winProbCombined = combineWinProbs({ h2h: winProbH2h, poisson: winProbPoisson, forme: winProbForme });
+
   /* Prédiction expérimentale : utilise la corrélation historique propre à chaque
      équipe (total corners de ses matchs vs total tirs/att. dangereuses de ces mêmes
      matchs) pour convertir une projection de tirs/attaques dangereuses en estimation
@@ -3225,6 +3371,15 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
+      <WinProbabilitySection
+        h2h={winProbH2h}
+        poisson={winProbPoisson}
+        forme={winProbForme}
+        combined={winProbCombined}
+        teamAName={teamA.nom}
+        teamBName={teamB.nom}
+      />
+
       <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", gap: 10 }}>
         <Flag size={16} color={C.dim} style={{ flexShrink: 0, marginTop: 2 }} />
         <div style={{ fontSize: 12, color: C.dim, lineHeight: 1.5 }}>
