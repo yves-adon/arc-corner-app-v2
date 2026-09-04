@@ -242,9 +242,10 @@ function WinProbAxisRow({ label, data, teamAName, teamBName, detail }) {
   );
 }
 
-function WinProbabilitySection({ h2h, poisson, forme, menace, combined, convAttDangA, convAttDangB, teamAName, teamBName }) {
+function WinProbabilitySection({ h2h, poisson, forme, menace, combined, convAttDangA, convAttDangB, convNA, convNB, teamAName, teamBName }) {
   if (!combined) return null;
   const hasConv = convAttDangA !== null && convAttDangA !== undefined && convAttDangB !== null && convAttDangB !== undefined;
+  const lowSample = (convNA !== null && convNA !== undefined && convNA < 6) || (convNB !== null && convNB !== undefined && convNB < 6);
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
       <SectionTitle sub="H2H + buts (Poisson) + attaques dangereuses + forme · expérimental">Probabilité de victoire normalisée</SectionTitle>
@@ -267,7 +268,10 @@ function WinProbabilitySection({ h2h, poisson, forme, menace, combined, convAttD
       </div>
       {hasConv && (
         <div style={{ display: "flex", flexDirection: "column", gap: 4, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
-          <div style={{ fontSize: 10.5, color: C.faint }}>Buts par attaque dangereuse (conversion)</div>
+          <div style={{ fontSize: 10.5, color: C.faint, display: "flex", justifyContent: "space-between" }}>
+            <span>Buts par attaque dangereuse (conversion, régularisée)</span>
+            {lowSample && <span style={{ color: C.jouable }}>échantillon faible ({convNA}/{convNB} matchs)</span>}
+          </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontFamily: FONT_MONO, fontSize: 13 }}>
             <span style={{ color: C.teamA, fontWeight: 700 }}>
               {teamAName || "Équipe A"} : {convAttDangA.toFixed(3)}
@@ -287,6 +291,8 @@ function WinProbabilitySection({ h2h, poisson, forme, menace, combined, convAttD
           <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic" }}>
             buts marqués / attaque dangereuse créée — une équipe peut générer beaucoup de danger sans concrétiser,
             d'où l'axe ci-dessus qui pondère le VOLUME d'attaques par ce taux plutôt que de ne compter que les buts.
+            Le taux brut est régularisé vers la moyenne commune aux 2 équipes quand l'échantillon est petit (moins
+            de 6 matchs), pour éviter qu'un seul match atypique fausse tout l'axe Attaques dangereuses.
           </div>
         </div>
       )}
@@ -3509,8 +3515,31 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
   const attDangSeriesB = attDangProjVenue ? effB.attDangSeries : statsBTotal.attDangSeries;
   const convButsSeriesA = attDangProjVenue ? effA.butsSeries : statsATotal.butsSeries;
   const convButsSeriesB = attDangProjVenue ? effB.butsSeries : statsBTotal.butsSeries;
-  const convAttDangA = convButsSeriesA && attDangSeriesA && attDangSeriesA.moyObtenus > 0 ? convButsSeriesA.moyObtenus / attDangSeriesA.moyObtenus : null;
-  const convAttDangB = convButsSeriesB && attDangSeriesB && attDangSeriesB.moyObtenus > 0 ? convButsSeriesB.moyObtenus / attDangSeriesB.moyObtenus : null;
+
+  // Taux de conversion RÉGULARISÉ (shrinkage vers la moyenne commune aux 2 équipes,
+  // pondérée par le nombre de matchs) — un ratio brut buts/attaque dangereuse sur 3-6
+  // matchs (cas courant) est extrêmement bruyant : un seul match atypique peut le
+  // multiplier ou diviser par 2, créant un désaccord artificiel avec l'axe Buts (basé
+  // sur des moyennes simples, bien plus stables qu'un ratio de deux moyennes déjà
+  // bruitées). PRIOR_WEIGHT_MATCHES = poids de la moyenne commune, en "matchs
+  // équivalents" — il faut environ ce nombre de matchs avant que le taux propre à
+  // l'équipe domine le calcul plutôt que la moyenne commune.
+  const PRIOR_WEIGHT_MATCHES = 6;
+  const poolButsA = convButsSeriesA ? convButsSeriesA.moyObtenus * (convButsSeriesA.n || 0) : 0;
+  const poolButsB = convButsSeriesB ? convButsSeriesB.moyObtenus * (convButsSeriesB.n || 0) : 0;
+  const poolAttA = attDangSeriesA ? attDangSeriesA.moyObtenus * (attDangSeriesA.n || 0) : 0;
+  const poolAttB = attDangSeriesB ? attDangSeriesB.moyObtenus * (attDangSeriesB.n || 0) : 0;
+  const poolConv = poolAttA + poolAttB > 0 ? (poolButsA + poolButsB) / (poolAttA + poolAttB) : null;
+  const shrinkConv = (butsSeries, attDangSeries) => {
+    if (!butsSeries || !attDangSeries || !attDangSeries.moyObtenus || poolConv === null) return null;
+    const n = attDangSeries.n || 0;
+    const raw = butsSeries.moyObtenus / attDangSeries.moyObtenus;
+    return { conv: (n * raw + PRIOR_WEIGHT_MATCHES * poolConv) / (n + PRIOR_WEIGHT_MATCHES), raw, n };
+  };
+  const convA = shrinkConv(convButsSeriesA, attDangSeriesA);
+  const convB = shrinkConv(convButsSeriesB, attDangSeriesB);
+  const convAttDangA = convA ? convA.conv : null;
+  const convAttDangB = convB ? convB.conv : null;
   const menaceA = attDangProj && convAttDangA !== null ? attDangProj.projA * convAttDangA : null;
   const menaceB = attDangProj && convAttDangB !== null ? attDangProj.projB * convAttDangB : null;
   const winProbMenace = menaceA !== null && menaceB !== null ? computePoissonMatch(menaceA, menaceB) : null;
@@ -3656,6 +3685,8 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
         combined={winProbCombined}
         convAttDangA={convAttDangA}
         convAttDangB={convAttDangB}
+        convNA={convA ? convA.n : null}
+        convNB={convB ? convB.n : null}
         teamAName={teamA.nom}
         teamBName={teamB.nom}
       />
