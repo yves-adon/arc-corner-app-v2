@@ -2968,12 +2968,26 @@ function mergeContinuationRows(rowTexts) {
   return merged;
 }
 
+// Mots-clés candidats pour reconnaître une équipe dans du texte tiers (sites différents,
+// noms abrégés) — ex. l'app connaît "Montevideo City Torque" mais le tableau collé ne
+// mentionne que "CA Torque" : il faut que "torque" suffise à matcher, pas seulement le
+// premier mot du nom complet. Mots ≥3 lettres, génériques ("fc", "city", "club"...) exclus
+// pour éviter les faux positifs quand une des deux équipes en contient un.
+const GENERIC_CLUB_WORDS = new Set(["fc", "cf", "sc", "ac", "afc", "cd", "ca", "cfc", "city", "club", "united", "utd", "real", "deportivo", "sporting", "atletico", "athletic", "olympique", "racing"]);
+function teamKeywords(name) {
+  return (name || "")
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((w) => w.length >= 3 && !GENERIC_CLUB_WORDS.has(w));
+}
+
 function parsePhotoH2hRows(rowTexts, teamAName, teamBName) {
-  const aWord = (teamAName || "").trim().toLowerCase().split(/\s+/).find((w) => w.length >= 3) || "";
-  const bWord = (teamBName || "").trim().toLowerCase().split(/\s+/).find((w) => w.length >= 3) || "";
+  const aWords = teamKeywords(teamAName);
+  const bWords = teamKeywords(teamBName);
   const results = [];
   const skipped = [];
-  if (!aWord || !bWord) return { results, skipped: rowTexts };
+  if (!aWords.length || !bWords.length) return { results, skipped: rowTexts };
 
   for (const raw of rowTexts) {
     // retire la mi-temps entre parenthèses pour ne pas la confondre avec le score
@@ -2986,10 +3000,10 @@ function parsePhotoH2hRows(rowTexts, teamAName, teamBName) {
     const leftGoals = scoreMatch[1];
     const rightGoals = scoreMatch[2];
 
-    const aLeft = before.includes(aWord);
-    const bLeft = before.includes(bWord);
-    const aRight = after.includes(aWord);
-    const bRight = after.includes(bWord);
+    const aLeft = aWords.some((w) => before.includes(w));
+    const bLeft = bWords.some((w) => before.includes(w));
+    const aRight = aWords.some((w) => after.includes(w));
+    const bRight = bWords.some((w) => after.includes(w));
 
     let butsA = null, butsB = null;
     if (aLeft && bRight) { butsA = leftGoals; butsB = rightGoals; }
@@ -3123,7 +3137,15 @@ function RawExtractH2h({ teamAName, teamBName, onImport }) {
       setError("Renseigne d'abord les deux noms d'équipe ci-dessus (pour identifier les bonnes lignes).");
       return;
     }
-    const { results, skipped } = parseRawH2hBlock(text, teamAName, teamBName);
+    // 1) format MakeYourStats/Flashscore (corners) ; 2) sinon, tableau "Head to head"
+    // (Forebet/SofaScore, buts) — cette boîte accepte donc les deux, au cas où l'un des
+    // deux tableaux soit collé ici plutôt que dans l'autre encart.
+    let { results, skipped } = parseRawH2hBlock(text, teamAName, teamBName);
+    if (!results.length) {
+      const table = parseH2hPastedTable(text, teamAName, teamBName);
+      results = table.results;
+      skipped = table.skipped;
+    }
     if (!results.length) {
       setError(`Aucune confrontation reconnue entre "${teamAName}" et "${teamBName}" — vérifie que les noms correspondent exactement à ceux du tableau collé.`);
       return;
@@ -3145,9 +3167,10 @@ function RawExtractH2h({ teamAName, teamBName, onImport }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 8, padding: 8, width: "100%" }}>
       <div style={{ fontSize: 10.5, color: C.dim, lineHeight: 1.4 }}>
-        Colle le tableau "TàT" / confrontations directes copié depuis MakeYourStats/Flashscore, tel quel. L'app repère
-        les matchs entre <b style={{ color: C.text }}>{teamAName || "(A)"}</b> et <b style={{ color: C.text }}>{teamBName || "(B)"}</b> et
-        lit la colonne corners automatiquement, peu importe qui jouait à domicile ce jour-là.
+        Colle le tableau "TàT" (corners, MakeYourStats/Flashscore) OU un tableau "Head to head" (buts, Forebet/SofaScore),
+        tel quel. L'app repère les matchs entre <b style={{ color: C.text }}>{teamAName || "(A)"}</b> et{" "}
+        <b style={{ color: C.text }}>{teamBName || "(B)"}</b> et détecte automatiquement lequel des deux formats c'est,
+        peu importe qui jouait à domicile ce jour-là.
         <b style={{ color: C.fragile }}> Vérifie toujours le résultat.</b>
       </div>
       <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Colle ici tout le tableau copié..." rows={8} style={{ ...inputStyle, resize: "vertical", fontSize: 12 }} />
@@ -3176,12 +3199,13 @@ function H2hSection({ h2h, setH2h, teamAName, teamBName, seasonProj }) {
   const importBulk = () => {
     const lines = bulkText.split("\n").map((l) => l.trim()).filter(Boolean);
     const parsed = [];
-    // mot-clé (pas le nom complet — "Nagoya" doit matcher même si l'équipe est
-    // enregistrée comme "Nagoya Grampus") ; premier mot ≥3 lettres, même logique que le
-    // matching de nom déjà utilisé ailleurs dans l'appli (parser TotalCorner)
-    const aWord = (teamAName || "").trim().toLowerCase().split(/\s+/).find((w) => w.length >= 3) || "";
-    const bWord = (teamBName || "").trim().toLowerCase().split(/\s+/).find((w) => w.length >= 3) || "";
+    // mots-clés (pas le nom complet — "Torque" doit matcher même si l'équipe est
+    // enregistrée comme "Montevideo City Torque") ; tous les mots ≥3 lettres hors mots
+    // génériques (FC, City, Club...), même logique que parsePhotoH2hRows/teamKeywords
+    const aWords = teamKeywords(teamAName);
+    const bWords = teamKeywords(teamBName);
     const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const lineHasAny = (line, words) => words.some((w) => new RegExp(`\\b${escapeRe(w)}`, "i").test(line));
 
     // Tableau "Head to head" multi-lignes (Forebet, SofaScore...) collé tel quel — testé
     // EN PREMIER : ce format a des lignes date seules ("09/03") qui, sinon, seraient
@@ -3201,8 +3225,8 @@ function H2hSection({ h2h, setH2h, teamAName, teamBName, seasonProj }) {
         const scoreTok = tokens.find((t) => /^\d+-\d+$/.test(t));
         if (scoreTok) {
           let home = null;
-          if (aWord && new RegExp(`\\b${escapeRe(aWord)}`, "i").test(line)) home = "A";
-          else if (bWord && new RegExp(`\\b${escapeRe(bWord)}`, "i").test(line)) home = "B";
+          if (aWords.length && lineHasAny(line, aWords)) home = "A";
+          else if (bWords.length && lineHasAny(line, bWords)) home = "B";
           else if (/(^|\s)a(\s|$)/i.test(line)) home = "A";
           else if (/(^|\s)b(\s|$)/i.test(line)) home = "B";
           if (home) {
