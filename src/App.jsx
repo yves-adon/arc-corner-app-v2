@@ -199,12 +199,15 @@ function computeFormeProb(rcA, rcB, pDrawAnchor) {
   const shareA = 1 / (1 + Math.exp(-1.1 * delta));
   return { pA: shareA * remaining, pDraw, pB: (1 - shareA) * remaining };
 }
-function combineWinProbs({ h2h, poisson, forme, menace }) {
+function combineWinProbs({ h2h, poissonVenue, poissonGlobal, menaceVenue, menaceGlobal, formeVenue, formeGlobal }) {
   const entries = [
-    { key: "h2h", label: "H2H", data: h2h, weight: 0.3 },
-    { key: "poisson", label: "Buts (Poisson)", data: poisson, weight: 0.35 },
-    { key: "menace", label: "Attaques dangereuses", data: menace, weight: 0.2 },
-    { key: "forme", label: "Forme (RC)", data: forme, weight: 0.15 },
+    { key: "h2h", data: h2h, weight: 0.3 },
+    { key: "poissonVenue", data: poissonVenue, weight: 0.175 },
+    { key: "poissonGlobal", data: poissonGlobal, weight: 0.175 },
+    { key: "menaceVenue", data: menaceVenue, weight: 0.1 },
+    { key: "menaceGlobal", data: menaceGlobal, weight: 0.1 },
+    { key: "formeVenue", data: formeVenue, weight: 0.075 },
+    { key: "formeGlobal", data: formeGlobal, weight: 0.075 },
   ].filter((e) => e.data);
   if (!entries.length) return null;
   const totalWeight = entries.reduce((s, e) => s + e.weight, 0);
@@ -242,13 +245,18 @@ function WinProbAxisRow({ label, data, teamAName, teamBName, detail }) {
   );
 }
 
-function WinProbabilitySection({ h2h, poisson, forme, menace, combined, convAttDangA, convAttDangB, convNA, convNB, teamAName, teamBName }) {
+function WinProbabilitySection({
+  h2h, poissonVenue, poissonGlobal, menaceVenue, menaceGlobal, formeVenue, formeGlobal,
+  combined, convAttDangA, convAttDangB, convNA, convNB, teamAName, teamBName,
+}) {
   if (!combined) return null;
   const hasConv = convAttDangA !== null && convAttDangA !== undefined && convAttDangB !== null && convAttDangB !== undefined;
   const lowSample = (convNA !== null && convNA !== undefined && convNA < 6) || (convNB !== null && convNB !== undefined && convNB < 6);
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
-      <SectionTitle sub="H2H + buts (Poisson) + attaques dangereuses + forme · expérimental">Probabilité de victoire normalisée</SectionTitle>
+      <SectionTitle sub="H2H + buts (Poisson) + attaques dangereuses + forme, dom./ext. ET tous lieux · expérimental">
+        Probabilité de victoire normalisée
+      </SectionTitle>
       <div style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 8, padding: 10 }}>
         <ThreeWayBar
           pctVic={combined.pA * 100}
@@ -260,16 +268,29 @@ function WinProbabilitySection({ h2h, poisson, forme, menace, combined, convAttD
           colorDef={C.teamB}
         />
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
         <WinProbAxisRow label="H2H (confrontations directes)" data={h2h} teamAName={teamAName} teamBName={teamBName} detail={h2h ? `${h2h.n} confront.` : null} />
-        <WinProbAxisRow label="Buts (Poisson)" data={poisson} teamAName={teamAName} teamBName={teamBName} />
-        <WinProbAxisRow label="Attaques dangereuses (volume × conversion)" data={menace} teamAName={teamAName} teamBName={teamBName} />
-        <WinProbAxisRow label="Forme (Ratio Cumulé)" data={forme} teamAName={teamAName} teamBName={teamBName} />
       </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
+        <div style={{ fontSize: 10, color: C.faint, textTransform: "uppercase", letterSpacing: 0.5 }}>Contexte domicile / extérieur</div>
+        <WinProbAxisRow label="Buts (Poisson)" data={poissonVenue} teamAName={teamAName} teamBName={teamBName} />
+        <WinProbAxisRow label="Attaques dangereuses (volume × conversion)" data={menaceVenue} teamAName={teamAName} teamBName={teamBName} />
+        <WinProbAxisRow label="Forme (Ratio Cumulé)" data={formeVenue} teamAName={teamAName} teamBName={teamBName} />
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
+        <div style={{ fontSize: 10, color: C.faint, textTransform: "uppercase", letterSpacing: 0.5 }}>Contexte tous lieux confondus</div>
+        <WinProbAxisRow label="Buts (Poisson)" data={poissonGlobal} teamAName={teamAName} teamBName={teamBName} />
+        <WinProbAxisRow label="Attaques dangereuses (volume × conversion)" data={menaceGlobal} teamAName={teamAName} teamBName={teamBName} />
+        <WinProbAxisRow label="Forme (Ratio Cumulé)" data={formeGlobal} teamAName={teamAName} teamBName={teamBName} />
+      </div>
+
       {hasConv && (
         <div style={{ display: "flex", flexDirection: "column", gap: 4, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
           <div style={{ fontSize: 10.5, color: C.faint, display: "flex", justifyContent: "space-between" }}>
-            <span>Buts par attaque dangereuse (conversion, régularisée)</span>
+            <span>Buts par attaque dangereuse (conversion, régularisée, contexte le + fourni)</span>
             {lowSample && <span style={{ color: C.jouable }}>échantillon faible ({convNA}/{convNB} matchs)</span>}
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontFamily: FONT_MONO, fontSize: 13 }}>
@@ -290,17 +311,19 @@ function WinProbabilitySection({ h2h, poisson, forme, menace, combined, convAttD
           />
           <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic" }}>
             buts marqués / attaque dangereuse créée — une équipe peut générer beaucoup de danger sans concrétiser,
-            d'où l'axe ci-dessus qui pondère le VOLUME d'attaques par ce taux plutôt que de ne compter que les buts.
-            Le taux brut est régularisé vers la moyenne commune aux 2 équipes quand l'échantillon est petit (moins
-            de 6 matchs), pour éviter qu'un seul match atypique fausse tout l'axe Attaques dangereuses.
+            d'où l'axe Attaques dangereuses qui pondère le VOLUME d'attaques par ce taux plutôt que de ne compter
+            que les buts. Taux régularisé vers la moyenne commune aux 2 équipes quand l'échantillon est petit
+            (moins de 6 matchs), pour chaque contexte séparément. Affiché ici : celui du contexte le mieux fourni.
           </div>
         </div>
       )}
+
       <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic" }}>
-        Moyenne pondérée (35% buts / 30% H2H / 20% attaques dangereuses / 15% forme, renormalisée selon les axes
-        disponibles) — pas backtestée, à recouper avec les autres panneaux plutôt qu'à suivre seule. Le nul de
-        l'axe Forme est calé sur celui du modèle Poisson (pas un modèle de nul indépendant) ; les axes Buts et
-        Attaques dangereuses ont chacun leur propre nul, calculé indépendamment.
+        Moyenne pondérée : 30% H2H, 35% buts (17.5% dom./ext. + 17.5% tous lieux), 20% attaques dangereuses (10% +
+        10%), 15% forme (7.5% + 7.5%) — renormalisée selon les axes disponibles. Pas backtestée, à recouper avec les
+        autres panneaux plutôt qu'à suivre seule. Le nul des axes Forme est calé sur celui du modèle Poisson du même
+        contexte (pas un modèle de nul indépendant) ; les axes Buts et Attaques dangereuses ont chacun leur propre
+        nul, calculé indépendamment.
       </div>
     </div>
   );
@@ -2992,6 +3015,28 @@ function parsePhotoH2hRows(rowTexts, teamAName, teamBName) {
   return { results, skipped };
 }
 
+// Même parseur que la photo (voir plus haut), mais sur du texte COLLÉ directement — pas
+// besoin de reconstruction OCR puisque les retours à la ligne du copier-coller sont déjà
+// fiables. Regroupe les lignes en blocs "un match = tout ce qui suit une ligne DD/MM
+// jusqu'à la prochaine" (Forebet, SofaScore et sites similaires affichent la date sur 2
+// lignes séparées du reste), puis réutilise exactement la même extraction score/équipes.
+function parseH2hPastedTable(text, teamAName, teamBName) {
+  const lines = (text || "").split("\n").map((l) => l.trim()).filter(Boolean);
+  const blocks = [];
+  let current = null;
+  for (const line of lines) {
+    if (/^\d{2}\/\d{2}$/.test(line)) {
+      if (current) blocks.push(current);
+      current = [line];
+    } else if (current) {
+      current.push(line);
+    }
+  }
+  if (current) blocks.push(current);
+  const rowTexts = blocks.map((b) => b.join(" "));
+  return parsePhotoH2hRows(rowTexts, teamAName, teamBName);
+}
+
 function PhotoExtractH2h({ teamAName, teamBName, onImport }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -3137,37 +3182,47 @@ function H2hSection({ h2h, setH2h, teamAName, teamBName, seasonProj }) {
     const aWord = (teamAName || "").trim().toLowerCase().split(/\s+/).find((w) => w.length >= 3) || "";
     const bWord = (teamBName || "").trim().toLowerCase().split(/\s+/).find((w) => w.length >= 3) || "";
     const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    for (const line of lines) {
-      // format buts + domicile : une ligne avec un score "X-Y" et une marque de qui
-      // recevait (nom d'équipe reconnu, ou lettre A/B en repli) — ex :
-      // "25-09-27 Nagoya 0-4" ou juste "B 0-4"
-      const tokens = line.split(/\s+/);
-      // le score doit être un token ENTIER "X-Y" (un seul tiret) — sinon une date comme
-      // "25-09-27" (deux tirets) se ferait passer pour un score via un regex non ancré
-      const scoreTok = tokens.find((t) => /^\d+-\d+$/.test(t));
-      if (scoreTok) {
-        let home = null;
-        if (aWord && new RegExp(`\\b${escapeRe(aWord)}`, "i").test(line)) home = "A";
-        else if (bWord && new RegExp(`\\b${escapeRe(bWord)}`, "i").test(line)) home = "B";
-        else if (/(^|\s)a(\s|$)/i.test(line)) home = "A";
-        else if (/(^|\s)b(\s|$)/i.test(line)) home = "B";
-        if (home) {
-          const [hVal, aVal] = scoreTok.split("-");
-          const butsA = home === "A" ? hVal : aVal;
-          const butsB = home === "B" ? hVal : aVal;
-          const dateTok = tokens.find((t) => t !== scoreTok && /^\d[\d/-]*\d$/.test(t));
-          parsed.push({ id: uid(), obtenusA: "", obtenusB: "", home, butsA, butsB, date: dateTok || "" });
-          continue;
+
+    // Tableau "Head to head" multi-lignes (Forebet, SofaScore...) collé tel quel — testé
+    // EN PREMIER : ce format a des lignes date seules ("09/03") qui, sinon, seraient
+    // happées à tort par le repli "2 nombres = corners" ci-dessous (09 et 03 comme faux
+    // corners) avant même d'avoir eu la chance d'être reconnues comme une date.
+    const { results: tableResults, skipped: tableSkipped } = parseH2hPastedTable(bulkText, teamAName, teamBName);
+    if (tableResults.length) {
+      parsed.push(...tableResults);
+    } else {
+      for (const line of lines) {
+        // format buts + domicile : une ligne avec un score "X-Y" et une marque de qui
+        // recevait (nom d'équipe reconnu, ou lettre A/B en repli) — ex :
+        // "25-09-27 Nagoya 0-4" ou juste "B 0-4"
+        const tokens = line.split(/\s+/);
+        // le score doit être un token ENTIER "X-Y" (un seul tiret) — sinon une date comme
+        // "25-09-27" (deux tirets) se ferait passer pour un score via un regex non ancré
+        const scoreTok = tokens.find((t) => /^\d+-\d+$/.test(t));
+        if (scoreTok) {
+          let home = null;
+          if (aWord && new RegExp(`\\b${escapeRe(aWord)}`, "i").test(line)) home = "A";
+          else if (bWord && new RegExp(`\\b${escapeRe(bWord)}`, "i").test(line)) home = "B";
+          else if (/(^|\s)a(\s|$)/i.test(line)) home = "A";
+          else if (/(^|\s)b(\s|$)/i.test(line)) home = "B";
+          if (home) {
+            const [hVal, aVal] = scoreTok.split("-");
+            const butsA = home === "A" ? hVal : aVal;
+            const butsB = home === "B" ? hVal : aVal;
+            const dateTok = tokens.find((t) => t !== scoreTok && /^\d[\d/-]*\d$/.test(t));
+            parsed.push({ id: uid(), obtenusA: "", obtenusB: "", home, butsA, butsB, date: dateTok || "" });
+            continue;
+          }
         }
+        // sinon, format classique : deux nombres = corners équipe A puis B
+        const nums = line.match(/-?\d+(\.\d+)?/g);
+        if (!nums || nums.length < 2) continue;
+        parsed.push({ id: uid(), obtenusA: nums[0], obtenusB: nums[1], home: null, butsA: "", butsB: "", date: "" });
       }
-      // sinon, format classique : deux nombres = corners équipe A puis B
-      const nums = line.match(/-?\d+(\.\d+)?/g);
-      if (!nums || nums.length < 2) continue;
-      parsed.push({ id: uid(), obtenusA: nums[0], obtenusB: nums[1], home: null, butsA: "", butsB: "", date: "" });
     }
     if (!parsed.length) {
       setBulkError(
-        `Aucune ligne reconnue — soit deux nombres (corners ${teamAName || "équipe A"} puis ${teamBName || "équipe B"}, ex : 5 4), soit une ligne avec le nom de l'équipe qui recevait et le score, ex : ${teamAName || "Équipe A"} 1-0`
+        `Aucune ligne reconnue — soit deux nombres (corners ${teamAName || "équipe A"} puis ${teamBName || "équipe B"}, ex : 5 4), soit une ligne avec le nom de l'équipe qui recevait et le score (ex : ${teamAName || "Équipe A"} 1-0), soit un tableau "Head to head" collé tel quel (type Forebet/SofaScore).${tableSkipped.length ? ` ${tableSkipped.length} bloc(s) détecté(s) mais non reconnu(s) (noms d'équipe introuvables dedans).` : ""}`
       );
       return;
     }
@@ -3205,7 +3260,8 @@ function H2hSection({ h2h, setH2h, teamAName, teamBName, seasonProj }) {
           <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
             <div style={{ fontSize: 10.5, color: C.faint }}>
               Un match par ligne (plus récent en haut) — soit corners {teamAName || "équipe A"} puis {teamBName || "équipe B"} (ex : 5 4),
-              soit domicile + score buts pour capturer le contexte domicile/extérieur (ex : {teamAName || "Équipe A"} 1-0, ou juste "A 1-0").
+              soit domicile + score buts pour capturer le contexte domicile/extérieur (ex : {teamAName || "Équipe A"} 1-0, ou juste "A 1-0"),
+              soit un tableau "Head to head" collé tel quel (type Forebet/SofaScore, avec dates et scores multi-lignes) — détecté automatiquement.
             </div>
             <textarea value={bulkText} onChange={(e) => setBulkText(e.target.value)} placeholder={"5 4\n" + (teamAName || "Équipe A") + " 1-0\nB 0-4\n..."} rows={5} style={{ ...inputStyle, resize: "vertical", fontSize: 13 }} />
             {bulkError && <div style={{ fontSize: 11, color: C.fragile }}>{bulkError}</div>}
@@ -3463,7 +3519,7 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
 
   // Même logique que la projection de buts, mais sur le VOLUME d'attaques dangereuses —
   // sert à la fois au panneau "Attaques dangereuses" existant et au nouvel axe de menace
-  // ci-dessous (winProbMenace), qui pondère ce volume par le taux de conversion réel.
+  // ci-dessous (winProbMenaceVenue / winProbMenaceGlobal), qui pondère ce volume par le taux de conversion réel.
   const attDangProjVenue = effA.attDangSeries && effB.attDangSeries
     ? projection(effA.attDangSeries.moyObtenus, effB.attDangSeries.moyConcedes, effB.attDangSeries.moyObtenus, effA.attDangSeries.moyConcedes)
     : null;
@@ -3489,20 +3545,38 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
   const h2hReady = h2hStats && h2hStats.n >= 3;
 
   // Probabilité de victoire normalisée (1X2) — voir le commentaire au-dessus de
-  // combineWinProbs pour le détail. Préfère la projection domicile/extérieur (comme le
-  // reste du duel) et ne retombe sur "tous lieux confondus" que si elle est indisponible.
-  const winProbProj = butsProjVenue || butsProjGlobal;
-  const winProbSeriesA = butsProjVenue ? effA.butsSeries : statsATotal.butsSeries;
-  const winProbSeriesB = butsProjVenue ? effB.butsSeries : statsBTotal.butsSeries;
+  // combineWinProbs pour le détail.
+  //
+  // Domicile/extérieur VS tous lieux confondus : plutôt que de choisir l'un des deux
+  // contextes (et jeter l'autre), chaque critère (Buts, Attaques dangereuses, Forme) est
+  // calculé UNE FOIS par contexte, et les deux versions sont injectées séparément dans la
+  // moyenne pondérée — exactement comme le reste de l'app affiche déjà les deux panneaux
+  // (domicile/extérieur ET tous lieux confondus) côte à côte avec un contrôle de
+  // convergence, plutôt que de n'en garder qu'un. Si les deux contextes sont d'accord, le
+  // résultat combiné est stable ; s'ils divergent, le résultat final se retrouve
+  // naturellement entre les deux plutôt que de trancher arbitrairement pour l'un.
+  // Un contexte manquant (ex. pas encore assez de matchs à domicile) est simplement
+  // absent de la moyenne, qui se renormalise sur ce qui reste (comme les autres axes).
   const winProbH2h = computeH2hWinProb(h2h);
-  const winProbPoisson = winProbProj ? computePoissonMatch(winProbProj.projA, winProbProj.projB) : null;
-  const winProbRcA = winProbSeriesA
-    ? computeRatioCumule({ projSide: winProbProj?.projA, projOther: winProbProj?.projB, ewma: winProbSeriesA.ewma, vol: winProbSeriesA.volatilite, part: winProbSeriesA.part })
+
+  const winProbPoissonVenue = butsProjVenue ? computePoissonMatch(butsProjVenue.projA, butsProjVenue.projB) : null;
+  const winProbPoissonGlobal = butsProjGlobal ? computePoissonMatch(butsProjGlobal.projA, butsProjGlobal.projB) : null;
+
+  const winProbRcVenueA = butsProjVenue && effA.butsSeries
+    ? computeRatioCumule({ projSide: butsProjVenue.projA, projOther: butsProjVenue.projB, ewma: effA.butsSeries.ewma, vol: effA.butsSeries.volatilite, part: effA.butsSeries.part })
     : null;
-  const winProbRcB = winProbSeriesB
-    ? computeRatioCumule({ projSide: winProbProj?.projB, projOther: winProbProj?.projA, ewma: winProbSeriesB.ewma, vol: winProbSeriesB.volatilite, part: winProbSeriesB.part })
+  const winProbRcVenueB = butsProjVenue && effB.butsSeries
+    ? computeRatioCumule({ projSide: butsProjVenue.projB, projOther: butsProjVenue.projA, ewma: effB.butsSeries.ewma, vol: effB.butsSeries.volatilite, part: effB.butsSeries.part })
     : null;
-  const winProbForme = computeFormeProb(winProbRcA, winProbRcB, winProbPoisson ? winProbPoisson.pDraw : null);
+  const winProbFormeVenue = computeFormeProb(winProbRcVenueA, winProbRcVenueB, winProbPoissonVenue ? winProbPoissonVenue.pDraw : null);
+
+  const winProbRcGlobalA = butsProjGlobal && statsATotal.butsSeries
+    ? computeRatioCumule({ projSide: butsProjGlobal.projA, projOther: butsProjGlobal.projB, ewma: statsATotal.butsSeries.ewma, vol: statsATotal.butsSeries.volatilite, part: statsATotal.butsSeries.part })
+    : null;
+  const winProbRcGlobalB = butsProjGlobal && statsBTotal.butsSeries
+    ? computeRatioCumule({ projSide: butsProjGlobal.projB, projOther: butsProjGlobal.projA, ewma: statsBTotal.butsSeries.ewma, vol: statsBTotal.butsSeries.volatilite, part: statsBTotal.butsSeries.part })
+    : null;
+  const winProbFormeGlobal = computeFormeProb(winProbRcGlobalA, winProbRcGlobalB, winProbPoissonGlobal ? winProbPoissonGlobal.pDraw : null);
 
   // Axe "Menace" (attaques dangereuses) — le volume brut d'attaques dangereuses compte
   // même sans concrétisation (comme demandé), mais est pondéré par le taux de conversion
@@ -3510,41 +3584,58 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
   // de danger pondéré par l'efficacité" comparable à une projection de buts. Repasse par
   // le même modèle Poisson que l'axe Buts, avec son propre nul (indépendant, pas calé sur
   // l'axe Buts) puisque volume × conversion est une vraie estimation de buts attendus.
-  const attDangProj = attDangProjVenue || attDangProjGlobal;
-  const attDangSeriesA = attDangProjVenue ? effA.attDangSeries : statsATotal.attDangSeries;
-  const attDangSeriesB = attDangProjVenue ? effB.attDangSeries : statsBTotal.attDangSeries;
-  const convButsSeriesA = attDangProjVenue ? effA.butsSeries : statsATotal.butsSeries;
-  const convButsSeriesB = attDangProjVenue ? effB.butsSeries : statsBTotal.butsSeries;
-
+  // Comme pour Buts/Forme ci-dessus, calculé séparément pour chaque contexte
+  // (domicile/extérieur et tous lieux confondus) plutôt que de choisir l'un des deux.
+  //
   // Taux de conversion RÉGULARISÉ (shrinkage vers la moyenne commune aux 2 équipes,
-  // pondérée par le nombre de matchs) — un ratio brut buts/attaque dangereuse sur 3-6
-  // matchs (cas courant) est extrêmement bruyant : un seul match atypique peut le
-  // multiplier ou diviser par 2, créant un désaccord artificiel avec l'axe Buts (basé
-  // sur des moyennes simples, bien plus stables qu'un ratio de deux moyennes déjà
-  // bruitées). PRIOR_WEIGHT_MATCHES = poids de la moyenne commune, en "matchs
-  // équivalents" — il faut environ ce nombre de matchs avant que le taux propre à
-  // l'équipe domine le calcul plutôt que la moyenne commune.
+  // pondérée par le nombre de matchs, PROPRE À CHAQUE CONTEXTE) — un ratio brut buts/
+  // attaque dangereuse sur 3-6 matchs (cas courant) est extrêmement bruyant : un seul
+  // match atypique peut le multiplier ou diviser par 2. PRIOR_WEIGHT_MATCHES = poids de
+  // la moyenne commune, en "matchs équivalents".
   const PRIOR_WEIGHT_MATCHES = 6;
-  const poolButsA = convButsSeriesA ? convButsSeriesA.moyObtenus * (convButsSeriesA.n || 0) : 0;
-  const poolButsB = convButsSeriesB ? convButsSeriesB.moyObtenus * (convButsSeriesB.n || 0) : 0;
-  const poolAttA = attDangSeriesA ? attDangSeriesA.moyObtenus * (attDangSeriesA.n || 0) : 0;
-  const poolAttB = attDangSeriesB ? attDangSeriesB.moyObtenus * (attDangSeriesB.n || 0) : 0;
-  const poolConv = poolAttA + poolAttB > 0 ? (poolButsA + poolButsB) / (poolAttA + poolAttB) : null;
-  const shrinkConv = (butsSeries, attDangSeries) => {
-    if (!butsSeries || !attDangSeries || !attDangSeries.moyObtenus || poolConv === null) return null;
-    const n = attDangSeries.n || 0;
-    const raw = butsSeries.moyObtenus / attDangSeries.moyObtenus;
-    return { conv: (n * raw + PRIOR_WEIGHT_MATCHES * poolConv) / (n + PRIOR_WEIGHT_MATCHES), raw, n };
+  const shrinkConv = (butsSeriesA, attDangSA, butsSeriesB, attDangSB) => {
+    const poolButsA = butsSeriesA ? butsSeriesA.moyObtenus * (butsSeriesA.n || 0) : 0;
+    const poolButsB = butsSeriesB ? butsSeriesB.moyObtenus * (butsSeriesB.n || 0) : 0;
+    const poolAttA = attDangSA ? attDangSA.moyObtenus * (attDangSA.n || 0) : 0;
+    const poolAttB = attDangSB ? attDangSB.moyObtenus * (attDangSB.n || 0) : 0;
+    const poolConv = poolAttA + poolAttB > 0 ? (poolButsA + poolButsB) / (poolAttA + poolAttB) : null;
+    const one = (butsSeries, attDangSeries) => {
+      if (!butsSeries || !attDangSeries || !attDangSeries.moyObtenus || poolConv === null) return null;
+      const n = attDangSeries.n || 0;
+      const raw = butsSeries.moyObtenus / attDangSeries.moyObtenus;
+      return { conv: (n * raw + PRIOR_WEIGHT_MATCHES * poolConv) / (n + PRIOR_WEIGHT_MATCHES), raw, n };
+    };
+    return { a: one(butsSeriesA, attDangSA), b: one(butsSeriesB, attDangSB) };
   };
-  const convA = shrinkConv(convButsSeriesA, attDangSeriesA);
-  const convB = shrinkConv(convButsSeriesB, attDangSeriesB);
-  const convAttDangA = convA ? convA.conv : null;
-  const convAttDangB = convB ? convB.conv : null;
-  const menaceA = attDangProj && convAttDangA !== null ? attDangProj.projA * convAttDangA : null;
-  const menaceB = attDangProj && convAttDangB !== null ? attDangProj.projB * convAttDangB : null;
-  const winProbMenace = menaceA !== null && menaceB !== null ? computePoissonMatch(menaceA, menaceB) : null;
 
-  const winProbCombined = combineWinProbs({ h2h: winProbH2h, poisson: winProbPoisson, forme: winProbForme, menace: winProbMenace });
+  const convVenue = shrinkConv(effA.butsSeries, effA.attDangSeries, effB.butsSeries, effB.attDangSeries);
+  const menaceVenueA = attDangProjVenue && convVenue.a ? attDangProjVenue.projA * convVenue.a.conv : null;
+  const menaceVenueB = attDangProjVenue && convVenue.b ? attDangProjVenue.projB * convVenue.b.conv : null;
+  const winProbMenaceVenue = menaceVenueA !== null && menaceVenueB !== null ? computePoissonMatch(menaceVenueA, menaceVenueB) : null;
+
+  const convGlobal = shrinkConv(statsATotal.butsSeries, statsATotal.attDangSeries, statsBTotal.butsSeries, statsBTotal.attDangSeries);
+  const menaceGlobalA = attDangProjGlobal && convGlobal.a ? attDangProjGlobal.projA * convGlobal.a.conv : null;
+  const menaceGlobalB = attDangProjGlobal && convGlobal.b ? attDangProjGlobal.projB * convGlobal.b.conv : null;
+  const winProbMenaceGlobal = menaceGlobalA !== null && menaceGlobalB !== null ? computePoissonMatch(menaceGlobalA, menaceGlobalB) : null;
+
+  // Affichage du taux de conversion : celui du contexte qui a le plus de matchs (le plus
+  // fiable des deux), à titre indicatif seulement — les DEUX contextes contribuent déjà
+  // séparément au calcul ci-dessus, ce chiffre est juste ce qu'on montre dans le petit
+  // visuel "buts par attaque dangereuse".
+  const convDisplayA = (convVenue.a?.n || 0) >= (convGlobal.a?.n || 0) ? convVenue.a : convGlobal.a;
+  const convDisplayB = (convVenue.b?.n || 0) >= (convGlobal.b?.n || 0) ? convVenue.b : convGlobal.b;
+  const convAttDangA = convDisplayA ? convDisplayA.conv : null;
+  const convAttDangB = convDisplayB ? convDisplayB.conv : null;
+
+  const winProbCombined = combineWinProbs({
+    h2h: winProbH2h,
+    poissonVenue: winProbPoissonVenue,
+    poissonGlobal: winProbPoissonGlobal,
+    menaceVenue: winProbMenaceVenue,
+    menaceGlobal: winProbMenaceGlobal,
+    formeVenue: winProbFormeVenue,
+    formeGlobal: winProbFormeGlobal,
+  });
 
 
   /* Prédiction expérimentale : utilise la corrélation historique propre à chaque
@@ -3679,14 +3770,17 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
     <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
       <WinProbabilitySection
         h2h={winProbH2h}
-        poisson={winProbPoisson}
-        forme={winProbForme}
-        menace={winProbMenace}
+        poissonVenue={winProbPoissonVenue}
+        poissonGlobal={winProbPoissonGlobal}
+        menaceVenue={winProbMenaceVenue}
+        menaceGlobal={winProbMenaceGlobal}
+        formeVenue={winProbFormeVenue}
+        formeGlobal={winProbFormeGlobal}
         combined={winProbCombined}
         convAttDangA={convAttDangA}
         convAttDangB={convAttDangB}
-        convNA={convA ? convA.n : null}
-        convNB={convB ? convB.n : null}
+        convNA={convDisplayA ? convDisplayA.n : null}
+        convNB={convDisplayB ? convDisplayB.n : null}
         teamAName={teamA.nom}
         teamBName={teamB.nom}
       />
