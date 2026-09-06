@@ -3724,13 +3724,8 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
 
   // Même logique que la projection de buts, mais sur le VOLUME d'attaques dangereuses —
   // sert à la fois au panneau "Attaques dangereuses" existant et au nouvel axe de menace
-  // ci-dessous (winProbMenaceVenue / winProbMenaceGlobal), qui pondère ce volume par le taux de conversion réel.
-  const attDangProjVenue = effA.attDangSeries && effB.attDangSeries
-    ? projection(effA.attDangSeries.moyObtenus, effB.attDangSeries.moyConcedes, effB.attDangSeries.moyObtenus, effA.attDangSeries.moyConcedes)
-    : null;
-  const attDangProjGlobal = statsATotal.attDangSeries && statsBTotal.attDangSeries
-    ? projection(statsATotal.attDangSeries.moyObtenus, statsBTotal.attDangSeries.moyConcedes, statsBTotal.attDangSeries.moyObtenus, statsATotal.attDangSeries.moyConcedes)
-    : null;
+  // (winProbMenaceVenue / winProbMenaceGlobal, calculé plus bas en EWMA), qui pondère ce
+  // volume par le taux de conversion réel.
 
   const ouDynVenueA = ligneVenue !== null ? computeOverUnder(teamAForVenueOU, "butsObtenus", "butsConcedes", ligneVenue) : null;
   const ouDynVenueB = ligneVenue !== null ? computeOverUnder(teamBForVenueOU, "butsObtenus", "butsConcedes", ligneVenue) : null;
@@ -3749,6 +3744,25 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
   const h2hStats = computeH2hStats(h2h);
   const h2hReady = h2hStats && h2hStats.n >= 3;
 
+  // Projections EWMA — UNIQUEMENT pour la probabilité de victoire / BTTS / Over-Under
+  // ci-dessous. Le reste de l'app (panneau "Projection buts", lignes Over/Under
+  // affichées ailleurs...) continue d'utiliser butsProjVenue/Global (moyenne brute) sans
+  // changement — on ne touche pas à ce qui existait avant cette section. La moyenne brute
+  // traite un match d'il y a 2 ans exactement comme un match d'il y a 2 semaines ; l'EWMA
+  // pondère plus fort les matchs récents, plus cohérent pour une proba de victoire.
+  const butsProjVenueEwma = effA.butsSeries && effB.butsSeries
+    ? projection(effA.butsSeries.ewmaObtenus, effB.butsSeries.ewmaConcedes, effB.butsSeries.ewmaObtenus, effA.butsSeries.ewmaConcedes)
+    : null;
+  const butsProjGlobalEwma = statsATotal.butsSeries && statsBTotal.butsSeries
+    ? projection(statsATotal.butsSeries.ewmaObtenus, statsBTotal.butsSeries.ewmaConcedes, statsBTotal.butsSeries.ewmaObtenus, statsATotal.butsSeries.ewmaConcedes)
+    : null;
+  const attDangProjVenueEwma = effA.attDangSeries && effB.attDangSeries
+    ? projection(effA.attDangSeries.ewmaObtenus, effB.attDangSeries.ewmaConcedes, effB.attDangSeries.ewmaObtenus, effA.attDangSeries.ewmaConcedes)
+    : null;
+  const attDangProjGlobalEwma = statsATotal.attDangSeries && statsBTotal.attDangSeries
+    ? projection(statsATotal.attDangSeries.ewmaObtenus, statsBTotal.attDangSeries.ewmaConcedes, statsBTotal.attDangSeries.ewmaObtenus, statsATotal.attDangSeries.ewmaConcedes)
+    : null;
+
   // Probabilité de victoire normalisée (1X2) — voir le commentaire au-dessus de
   // combineWinProbs pour le détail.
   //
@@ -3764,22 +3778,22 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
   // absent de la moyenne, qui se renormalise sur ce qui reste (comme les autres axes).
   const winProbH2h = computeH2hWinProb(h2hEffective);
 
-  const winProbPoissonVenue = butsProjVenue ? computePoissonMatch(butsProjVenue.projA, butsProjVenue.projB) : null;
-  const winProbPoissonGlobal = butsProjGlobal ? computePoissonMatch(butsProjGlobal.projA, butsProjGlobal.projB) : null;
+  const winProbPoissonVenue = butsProjVenueEwma ? computePoissonMatch(butsProjVenueEwma.projA, butsProjVenueEwma.projB) : null;
+  const winProbPoissonGlobal = butsProjGlobalEwma ? computePoissonMatch(butsProjGlobalEwma.projA, butsProjGlobalEwma.projB) : null;
 
-  const winProbRcVenueA = butsProjVenue && effA.butsSeries
-    ? computeRatioCumule({ projSide: butsProjVenue.projA, projOther: butsProjVenue.projB, ewma: effA.butsSeries.ewma, vol: effA.butsSeries.volatilite, part: effA.butsSeries.part })
+  const winProbRcVenueA = butsProjVenueEwma && effA.butsSeries
+    ? computeRatioCumule({ projSide: butsProjVenueEwma.projA, projOther: butsProjVenueEwma.projB, ewma: effA.butsSeries.ewma, vol: effA.butsSeries.volatilite, part: effA.butsSeries.part })
     : null;
-  const winProbRcVenueB = butsProjVenue && effB.butsSeries
-    ? computeRatioCumule({ projSide: butsProjVenue.projB, projOther: butsProjVenue.projA, ewma: effB.butsSeries.ewma, vol: effB.butsSeries.volatilite, part: effB.butsSeries.part })
+  const winProbRcVenueB = butsProjVenueEwma && effB.butsSeries
+    ? computeRatioCumule({ projSide: butsProjVenueEwma.projB, projOther: butsProjVenueEwma.projA, ewma: effB.butsSeries.ewma, vol: effB.butsSeries.volatilite, part: effB.butsSeries.part })
     : null;
   const winProbFormeVenue = computeFormeProb(winProbRcVenueA, winProbRcVenueB, winProbPoissonVenue ? winProbPoissonVenue.pDraw : null);
 
-  const winProbRcGlobalA = butsProjGlobal && statsATotal.butsSeries
-    ? computeRatioCumule({ projSide: butsProjGlobal.projA, projOther: butsProjGlobal.projB, ewma: statsATotal.butsSeries.ewma, vol: statsATotal.butsSeries.volatilite, part: statsATotal.butsSeries.part })
+  const winProbRcGlobalA = butsProjGlobalEwma && statsATotal.butsSeries
+    ? computeRatioCumule({ projSide: butsProjGlobalEwma.projA, projOther: butsProjGlobalEwma.projB, ewma: statsATotal.butsSeries.ewma, vol: statsATotal.butsSeries.volatilite, part: statsATotal.butsSeries.part })
     : null;
-  const winProbRcGlobalB = butsProjGlobal && statsBTotal.butsSeries
-    ? computeRatioCumule({ projSide: butsProjGlobal.projB, projOther: butsProjGlobal.projA, ewma: statsBTotal.butsSeries.ewma, vol: statsBTotal.butsSeries.volatilite, part: statsBTotal.butsSeries.part })
+  const winProbRcGlobalB = butsProjGlobalEwma && statsBTotal.butsSeries
+    ? computeRatioCumule({ projSide: butsProjGlobalEwma.projB, projOther: butsProjGlobalEwma.projA, ewma: statsBTotal.butsSeries.ewma, vol: statsBTotal.butsSeries.volatilite, part: statsBTotal.butsSeries.part })
     : null;
   const winProbFormeGlobal = computeFormeProb(winProbRcGlobalA, winProbRcGlobalB, winProbPoissonGlobal ? winProbPoissonGlobal.pDraw : null);
 
@@ -3791,6 +3805,11 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
   // l'axe Buts) puisque volume × conversion est une vraie estimation de buts attendus.
   // Comme pour Buts/Forme ci-dessus, calculé séparément pour chaque contexte
   // (domicile/extérieur et tous lieux confondus) plutôt que de choisir l'un des deux.
+  // Le VOLUME (attDangProj) utilise l'EWMA, comme l'axe Buts. Le TAUX DE CONVERSION reste
+  // en moyenne brute + shrinkage (ci-dessous) : c'est un ratio de deux totaux réels (buts
+  // marqués / attaques créées sur l'échantillon), et le shrinkage vers la moyenne commune
+  // des 2 équipes suppose des totaux additionnables — l'EWMA n'est pas un total, mélanger
+  // les deux casserait cette logique de régularisation statistique.
   //
   // Taux de conversion RÉGULARISÉ (shrinkage vers la moyenne commune aux 2 équipes,
   // pondérée par le nombre de matchs, PROPRE À CHAQUE CONTEXTE) — un ratio brut buts/
@@ -3814,13 +3833,13 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
   };
 
   const convVenue = shrinkConv(effA.butsSeries, effA.attDangSeries, effB.butsSeries, effB.attDangSeries);
-  const menaceVenueA = attDangProjVenue && convVenue.a ? attDangProjVenue.projA * convVenue.a.conv : null;
-  const menaceVenueB = attDangProjVenue && convVenue.b ? attDangProjVenue.projB * convVenue.b.conv : null;
+  const menaceVenueA = attDangProjVenueEwma && convVenue.a ? attDangProjVenueEwma.projA * convVenue.a.conv : null;
+  const menaceVenueB = attDangProjVenueEwma && convVenue.b ? attDangProjVenueEwma.projB * convVenue.b.conv : null;
   const winProbMenaceVenue = menaceVenueA !== null && menaceVenueB !== null ? computePoissonMatch(menaceVenueA, menaceVenueB) : null;
 
   const convGlobal = shrinkConv(statsATotal.butsSeries, statsATotal.attDangSeries, statsBTotal.butsSeries, statsBTotal.attDangSeries);
-  const menaceGlobalA = attDangProjGlobal && convGlobal.a ? attDangProjGlobal.projA * convGlobal.a.conv : null;
-  const menaceGlobalB = attDangProjGlobal && convGlobal.b ? attDangProjGlobal.projB * convGlobal.b.conv : null;
+  const menaceGlobalA = attDangProjGlobalEwma && convGlobal.a ? attDangProjGlobalEwma.projA * convGlobal.a.conv : null;
+  const menaceGlobalB = attDangProjGlobalEwma && convGlobal.b ? attDangProjGlobalEwma.projB * convGlobal.b.conv : null;
   const winProbMenaceGlobal = menaceGlobalA !== null && menaceGlobalB !== null ? computePoissonMatch(menaceGlobalA, menaceGlobalB) : null;
 
   // Affichage du taux de conversion : celui du contexte qui a le plus de matchs (le plus
@@ -3854,8 +3873,8 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
   const h2hBttsRate = h2hEmpiricalBtts(h2hEffective);
   const bttsNormalized = combineProb([
     { key: "h2h", p: h2hBttsRate ? h2hBttsRate.rate : null, weight: OU_BTTS_WEIGHTS.h2h },
-    { key: "butsVenue", p: butsProjVenue ? poissonBttsProb(butsProjVenue.projA, butsProjVenue.projB) : null, weight: OU_BTTS_WEIGHTS.butsVenue },
-    { key: "butsGlobal", p: butsProjGlobal ? poissonBttsProb(butsProjGlobal.projA, butsProjGlobal.projB) : null, weight: OU_BTTS_WEIGHTS.butsGlobal },
+    { key: "butsVenue", p: butsProjVenueEwma ? poissonBttsProb(butsProjVenueEwma.projA, butsProjVenueEwma.projB) : null, weight: OU_BTTS_WEIGHTS.butsVenue },
+    { key: "butsGlobal", p: butsProjGlobalEwma ? poissonBttsProb(butsProjGlobalEwma.projA, butsProjGlobalEwma.projB) : null, weight: OU_BTTS_WEIGHTS.butsGlobal },
     { key: "menaceVenue", p: menaceVenueA !== null && menaceVenueB !== null ? poissonBttsProb(menaceVenueA, menaceVenueB) : null, weight: OU_BTTS_WEIGHTS.menaceVenue },
     { key: "menaceGlobal", p: menaceGlobalA !== null && menaceGlobalB !== null ? poissonBttsProb(menaceGlobalA, menaceGlobalB) : null, weight: OU_BTTS_WEIGHTS.menaceGlobal },
   ]);
@@ -3864,8 +3883,8 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
     const h2hRate = h2hEmpiricalOverRate(h2hEffective, "total", line);
     const data = combineProb([
       { key: "h2h", p: h2hRate ? h2hRate.rate : null, weight: OU_BTTS_WEIGHTS.h2h },
-      { key: "butsVenue", p: butsProjVenue ? poissonOverProb(butsProjVenue.total, line) : null, weight: OU_BTTS_WEIGHTS.butsVenue },
-      { key: "butsGlobal", p: butsProjGlobal ? poissonOverProb(butsProjGlobal.total, line) : null, weight: OU_BTTS_WEIGHTS.butsGlobal },
+      { key: "butsVenue", p: butsProjVenueEwma ? poissonOverProb(butsProjVenueEwma.total, line) : null, weight: OU_BTTS_WEIGHTS.butsVenue },
+      { key: "butsGlobal", p: butsProjGlobalEwma ? poissonOverProb(butsProjGlobalEwma.total, line) : null, weight: OU_BTTS_WEIGHTS.butsGlobal },
       { key: "menaceVenue", p: menaceVenueTotal !== null ? poissonOverProb(menaceVenueTotal, line) : null, weight: OU_BTTS_WEIGHTS.menaceVenue },
       { key: "menaceGlobal", p: menaceGlobalTotal !== null ? poissonOverProb(menaceGlobalTotal, line) : null, weight: OU_BTTS_WEIGHTS.menaceGlobal },
     ]);
@@ -3877,15 +3896,15 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
     const h2hRateB = h2hEmpiricalOverRate(h2hEffective, "butsB", line);
     const pA = combineProb([
       { key: "h2h", p: h2hRateA ? h2hRateA.rate : null, weight: OU_BTTS_WEIGHTS.h2h },
-      { key: "butsVenue", p: butsProjVenue ? poissonOverProb(butsProjVenue.projA, line) : null, weight: OU_BTTS_WEIGHTS.butsVenue },
-      { key: "butsGlobal", p: butsProjGlobal ? poissonOverProb(butsProjGlobal.projA, line) : null, weight: OU_BTTS_WEIGHTS.butsGlobal },
+      { key: "butsVenue", p: butsProjVenueEwma ? poissonOverProb(butsProjVenueEwma.projA, line) : null, weight: OU_BTTS_WEIGHTS.butsVenue },
+      { key: "butsGlobal", p: butsProjGlobalEwma ? poissonOverProb(butsProjGlobalEwma.projA, line) : null, weight: OU_BTTS_WEIGHTS.butsGlobal },
       { key: "menaceVenue", p: menaceVenueA !== null ? poissonOverProb(menaceVenueA, line) : null, weight: OU_BTTS_WEIGHTS.menaceVenue },
       { key: "menaceGlobal", p: menaceGlobalA !== null ? poissonOverProb(menaceGlobalA, line) : null, weight: OU_BTTS_WEIGHTS.menaceGlobal },
     ]);
     const pB = combineProb([
       { key: "h2h", p: h2hRateB ? h2hRateB.rate : null, weight: OU_BTTS_WEIGHTS.h2h },
-      { key: "butsVenue", p: butsProjVenue ? poissonOverProb(butsProjVenue.projB, line) : null, weight: OU_BTTS_WEIGHTS.butsVenue },
-      { key: "butsGlobal", p: butsProjGlobal ? poissonOverProb(butsProjGlobal.projB, line) : null, weight: OU_BTTS_WEIGHTS.butsGlobal },
+      { key: "butsVenue", p: butsProjVenueEwma ? poissonOverProb(butsProjVenueEwma.projB, line) : null, weight: OU_BTTS_WEIGHTS.butsVenue },
+      { key: "butsGlobal", p: butsProjGlobalEwma ? poissonOverProb(butsProjGlobalEwma.projB, line) : null, weight: OU_BTTS_WEIGHTS.butsGlobal },
       { key: "menaceVenue", p: menaceVenueB !== null ? poissonOverProb(menaceVenueB, line) : null, weight: OU_BTTS_WEIGHTS.menaceVenue },
       { key: "menaceGlobal", p: menaceGlobalB !== null ? poissonOverProb(menaceGlobalB, line) : null, weight: OU_BTTS_WEIGHTS.menaceGlobal },
     ]);
