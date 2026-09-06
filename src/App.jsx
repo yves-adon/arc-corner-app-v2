@@ -218,6 +218,72 @@ function combineWinProbs({ h2h, poissonVenue, poissonGlobal, menaceVenue, menace
   return { pA: pA / sum, pDraw: pDraw / sum, pB: pB / sum, usedKeys: entries.map((e) => e.key) };
 }
 
+/* ---------------------------------------------------------------
+   BTTS & OVER/UNDER NORMALISÉS — EXPÉRIMENTAL
+   ---------------------------------------------------------------
+   Même principe que la probabilité de victoire ci-dessus, réappliqué au BTTS
+   (les 2 équipes marquent) et à l'Over/Under (buts du match ET buts par
+   équipe séparément) : plutôt qu'une seule estimation, on combine plusieurs
+   lectures indépendantes déjà calculées ailleurs dans l'app —
+     - H2H : fréquence RÉELLE (comptage brut) sur les confrontations directes.
+     - Buts (Poisson), domicile/extérieur ET tous lieux confondus : à partir
+       des mêmes lambdas que l'axe Buts de la probabilité de victoire.
+     - Attaques dangereuses (volume × conversion), domicile/extérieur ET tous
+       lieux confondus : mêmes lambdas "menace" que l'axe correspondant.
+   Poids : 35% H2H, 20%+20% buts (dom./ext. + global), 12.5%+12.5% menace
+   (dom./ext. + global) — pas de "Forme (RC)" ici, un écart de forme signé ne
+   se traduit pas directement en probabilité de marquer un nombre de buts
+   donné, contrairement aux 3 autres lectures qui sont toutes des estimations
+   de buts. Renormalisé selon les lectures disponibles, comme le reste.
+   Le but du visuel "par équipe" : reconnaître d'un coup d'œil une équipe qui
+   marque ET encaisse beaucoup (BTTS élevé) même si le match a un favori net
+   côté résultat — les deux informations sont indépendantes. */
+
+// P(X > ligne) pour X ~ Poisson(lambda) — ligne = k.5 (0.5, 1.5, 2.5...)
+function poissonOverProb(lambda, line, maxK = 30) {
+  if (lambda === null || lambda === undefined || isNaN(lambda)) return null;
+  const l = Math.max(lambda, 0.001);
+  const threshold = Math.floor(line) + 1; // ex : ligne 1.5 -> il faut ≥2 buts pour être "over"
+  let pUnder = 0;
+  for (let k = 0; k < threshold && k <= maxK; k++) pUnder += poissonPmf(k, l);
+  return Math.max(0, Math.min(1, 1 - pUnder));
+}
+// BTTS depuis 2 lambdas indépendants : P(A marque ≥1) × P(B marque ≥1)
+function poissonBttsProb(lambdaA, lambdaB) {
+  if (lambdaA === null || lambdaA === undefined || lambdaB === null || lambdaB === undefined || isNaN(lambdaA) || isNaN(lambdaB)) return null;
+  const pA0 = Math.exp(-Math.max(lambdaA, 0));
+  const pB0 = Math.exp(-Math.max(lambdaB, 0));
+  return (1 - pA0) * (1 - pB0);
+}
+// fréquence réelle sur les H2H (comptage brut, comme l'axe H2H de la proba de victoire) —
+// field: "total" (buts du match), "butsA" ou "butsB" (buts d'une équipe seule)
+function h2hEmpiricalOverRate(h2h, field, line) {
+  const valid = (h2h || []).filter((m) => m.butsA !== "" && m.butsA !== undefined && m.butsA !== null && m.butsB !== "" && m.butsB !== undefined && m.butsB !== null);
+  if (valid.length < 3) return null;
+  const overCount = valid.filter((m) => {
+    const a = num(m.butsA), b = num(m.butsB);
+    const val = field === "total" ? a + b : field === "butsA" ? a : b;
+    return val > line;
+  }).length;
+  return { n: valid.length, rate: overCount / valid.length };
+}
+function h2hEmpiricalBtts(h2h) {
+  const valid = (h2h || []).filter((m) => m.butsA !== "" && m.butsA !== undefined && m.butsA !== null && m.butsB !== "" && m.butsB !== undefined && m.butsB !== null);
+  if (valid.length < 3) return null;
+  const yes = valid.filter((m) => num(m.butsA) > 0 && num(m.butsB) > 0).length;
+  return { n: valid.length, rate: yes / valid.length };
+}
+// moyenne pondérée générique de plusieurs estimations indépendantes d'UNE probabilité
+// (contrairement à combineWinProbs qui combine des triplets 1X2, ici une seule valeur)
+function combineProb(sources) {
+  const entries = sources.filter((s) => s.p !== null && s.p !== undefined && !isNaN(s.p));
+  if (!entries.length) return null;
+  const totalW = entries.reduce((s, e) => s + e.weight, 0);
+  const p = entries.reduce((s, e) => s + e.p * e.weight, 0) / totalW;
+  return { p: Math.max(0, Math.min(1, p)), usedKeys: entries.map((e) => e.key) };
+}
+const OU_BTTS_WEIGHTS = { h2h: 0.35, butsVenue: 0.2, butsGlobal: 0.2, menaceVenue: 0.125, menaceGlobal: 0.125 };
+
 /* Une ligne = une lecture (H2H / Buts / Forme) : petite barre 3 voies + label,
    ou message "indisponible" si les données manquent — pour que la synthèse
    ci-dessus reste vérifiable au lieu d'être une boîte noire. */
@@ -324,6 +390,81 @@ function WinProbabilitySection({
         autres panneaux plutôt qu'à suivre seule. Le nul des axes Forme est calé sur celui du modèle Poisson du même
         contexte (pas un modèle de nul indépendant) ; les axes Buts et Attaques dangereuses ont chacun leur propre
         nul, calculé indépendamment.
+      </div>
+    </div>
+  );
+}
+
+function OuProbBar({ p }) {
+  if (!p) return <div style={{ fontSize: 10.5, color: C.faint, fontStyle: "italic" }}>indisponible</div>;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div style={{ flex: 1, height: 8, borderRadius: 4, background: C.line, overflow: "hidden" }}>
+        <div style={{ width: `${(p.p * 100).toFixed(1)}%`, height: "100%", background: C.jouable }} />
+      </div>
+      <span style={{ fontFamily: FONT_MONO, fontSize: 12.5, fontWeight: 700, color: C.text, minWidth: 36, textAlign: "right" }}>
+        {(p.p * 100).toFixed(0)}%
+      </span>
+    </div>
+  );
+}
+
+function OuTeamLineRow({ line, pA, pB, teamAName, teamBName }) {
+  const ready = pA && pB;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      <div style={{ fontSize: 10.5, color: C.faint }}>Plus de {line} but{line >= 1 ? "s" : ""}</div>
+      {ready ? (
+        <>
+          <div style={{ display: "flex", justifyContent: "space-between", fontFamily: FONT_MONO, fontSize: 12.5 }}>
+            <span style={{ color: C.teamA, fontWeight: 700 }}>{teamAName || "Équipe A"} {(pA.p * 100).toFixed(0)}%</span>
+            <span style={{ color: C.teamB, fontWeight: 700 }}>{teamBName || "Équipe B"} {(pB.p * 100).toFixed(0)}%</span>
+          </div>
+          <SplitBar left={pA.p} right={pB.p} colorLeft={C.teamA} colorRight={C.teamB} labelLeft="" labelRight="" />
+        </>
+      ) : (
+        <div style={{ fontSize: 10.5, color: C.faint, fontStyle: "italic" }}>indisponible</div>
+      )}
+    </div>
+  );
+}
+
+function OuBttsSection({ btts, totalLines, teamLines, teamAName, teamBName }) {
+  if (!btts && !(totalLines || []).some((l) => l.data) && !(teamLines || []).some((l) => l.pA || l.pB)) return null;
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+      <SectionTitle sub="H2H + buts (Poisson) + attaques dangereuses, dom./ext. ET tous lieux · expérimental">
+        BTTS &amp; Over/Under normalisés
+      </SectionTitle>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+        <div style={{ fontSize: 10.5, color: C.faint }}>BTTS (les deux équipes marquent)</div>
+        <OuProbBar p={btts} />
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
+        <div style={{ fontSize: 10, color: C.faint, textTransform: "uppercase", letterSpacing: 0.5 }}>Buts du match (total)</div>
+        {totalLines.map(({ line, data }) => (
+          <div key={line} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+            <div style={{ fontSize: 10.5, color: C.faint }}>Plus de {line} buts</div>
+            <OuProbBar p={data} />
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
+        <div style={{ fontSize: 10, color: C.faint, textTransform: "uppercase", letterSpacing: 0.5 }}>Buts par équipe — qui se dégage ?</div>
+        {teamLines.map(({ line, pA, pB }) => (
+          <OuTeamLineRow key={line} line={line} pA={pA} pB={pB} teamAName={teamAName} teamBName={teamBName} />
+        ))}
+      </div>
+
+      <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic" }}>
+        Même principe que la probabilité de victoire : moyenne pondérée de 5 lectures (35% H2H, 20%+20% buts
+        dom./ext.+global, 12.5%+12.5% attaques dangereuses dom./ext.+global), renormalisée selon ce qui est
+        disponible — pas de "Forme (RC)" ici, un écart de forme signé ne se traduit pas directement en probabilité
+        de buts. Une équipe peut ressortir favorite au résultat tout en ayant un BTTS élevé : les deux infos sont
+        indépendantes, d'où ce visuel séparé plutôt que noyé dans la probabilité de victoire.
       </div>
     </div>
   );
@@ -3701,6 +3842,56 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
     formeGlobal: winProbFormeGlobal,
   });
 
+  // BTTS & Over/Under normalisés — voir le commentaire au-dessus de OU_BTTS_WEIGHTS.
+  // Réutilise TELS QUELS les lambdas déjà calculés pour la probabilité de victoire
+  // (butsProjVenue/Global, menaceVenue/GlobalA/B) — aucun nouveau calcul de fond, juste
+  // une lecture différente des mêmes chiffres.
+  const OU_TOTAL_LINES = [1.5, 2.5, 3.5];
+  const OU_TEAM_LINES = [0.5, 1.5, 2.5];
+  const menaceVenueTotal = menaceVenueA !== null && menaceVenueB !== null ? menaceVenueA + menaceVenueB : null;
+  const menaceGlobalTotal = menaceGlobalA !== null && menaceGlobalB !== null ? menaceGlobalA + menaceGlobalB : null;
+
+  const h2hBttsRate = h2hEmpiricalBtts(h2hEffective);
+  const bttsNormalized = combineProb([
+    { key: "h2h", p: h2hBttsRate ? h2hBttsRate.rate : null, weight: OU_BTTS_WEIGHTS.h2h },
+    { key: "butsVenue", p: butsProjVenue ? poissonBttsProb(butsProjVenue.projA, butsProjVenue.projB) : null, weight: OU_BTTS_WEIGHTS.butsVenue },
+    { key: "butsGlobal", p: butsProjGlobal ? poissonBttsProb(butsProjGlobal.projA, butsProjGlobal.projB) : null, weight: OU_BTTS_WEIGHTS.butsGlobal },
+    { key: "menaceVenue", p: menaceVenueA !== null && menaceVenueB !== null ? poissonBttsProb(menaceVenueA, menaceVenueB) : null, weight: OU_BTTS_WEIGHTS.menaceVenue },
+    { key: "menaceGlobal", p: menaceGlobalA !== null && menaceGlobalB !== null ? poissonBttsProb(menaceGlobalA, menaceGlobalB) : null, weight: OU_BTTS_WEIGHTS.menaceGlobal },
+  ]);
+
+  const ouTotalLines = OU_TOTAL_LINES.map((line) => {
+    const h2hRate = h2hEmpiricalOverRate(h2hEffective, "total", line);
+    const data = combineProb([
+      { key: "h2h", p: h2hRate ? h2hRate.rate : null, weight: OU_BTTS_WEIGHTS.h2h },
+      { key: "butsVenue", p: butsProjVenue ? poissonOverProb(butsProjVenue.total, line) : null, weight: OU_BTTS_WEIGHTS.butsVenue },
+      { key: "butsGlobal", p: butsProjGlobal ? poissonOverProb(butsProjGlobal.total, line) : null, weight: OU_BTTS_WEIGHTS.butsGlobal },
+      { key: "menaceVenue", p: menaceVenueTotal !== null ? poissonOverProb(menaceVenueTotal, line) : null, weight: OU_BTTS_WEIGHTS.menaceVenue },
+      { key: "menaceGlobal", p: menaceGlobalTotal !== null ? poissonOverProb(menaceGlobalTotal, line) : null, weight: OU_BTTS_WEIGHTS.menaceGlobal },
+    ]);
+    return { line, data };
+  });
+
+  const ouTeamLines = OU_TEAM_LINES.map((line) => {
+    const h2hRateA = h2hEmpiricalOverRate(h2hEffective, "butsA", line);
+    const h2hRateB = h2hEmpiricalOverRate(h2hEffective, "butsB", line);
+    const pA = combineProb([
+      { key: "h2h", p: h2hRateA ? h2hRateA.rate : null, weight: OU_BTTS_WEIGHTS.h2h },
+      { key: "butsVenue", p: butsProjVenue ? poissonOverProb(butsProjVenue.projA, line) : null, weight: OU_BTTS_WEIGHTS.butsVenue },
+      { key: "butsGlobal", p: butsProjGlobal ? poissonOverProb(butsProjGlobal.projA, line) : null, weight: OU_BTTS_WEIGHTS.butsGlobal },
+      { key: "menaceVenue", p: menaceVenueA !== null ? poissonOverProb(menaceVenueA, line) : null, weight: OU_BTTS_WEIGHTS.menaceVenue },
+      { key: "menaceGlobal", p: menaceGlobalA !== null ? poissonOverProb(menaceGlobalA, line) : null, weight: OU_BTTS_WEIGHTS.menaceGlobal },
+    ]);
+    const pB = combineProb([
+      { key: "h2h", p: h2hRateB ? h2hRateB.rate : null, weight: OU_BTTS_WEIGHTS.h2h },
+      { key: "butsVenue", p: butsProjVenue ? poissonOverProb(butsProjVenue.projB, line) : null, weight: OU_BTTS_WEIGHTS.butsVenue },
+      { key: "butsGlobal", p: butsProjGlobal ? poissonOverProb(butsProjGlobal.projB, line) : null, weight: OU_BTTS_WEIGHTS.butsGlobal },
+      { key: "menaceVenue", p: menaceVenueB !== null ? poissonOverProb(menaceVenueB, line) : null, weight: OU_BTTS_WEIGHTS.menaceVenue },
+      { key: "menaceGlobal", p: menaceGlobalB !== null ? poissonOverProb(menaceGlobalB, line) : null, weight: OU_BTTS_WEIGHTS.menaceGlobal },
+    ]);
+    return { line, pA, pB };
+  });
+
 
   /* Prédiction expérimentale : utilise la corrélation historique propre à chaque
      équipe (total corners de ses matchs vs total tirs/att. dangereuses de ces mêmes
@@ -3845,6 +4036,14 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
         convAttDangB={convAttDangB}
         convNA={convDisplayA ? convDisplayA.n : null}
         convNB={convDisplayB ? convDisplayB.n : null}
+        teamAName={teamA.nom}
+        teamBName={teamB.nom}
+      />
+
+      <OuBttsSection
+        btts={bttsNormalized}
+        totalLines={ouTotalLines}
+        teamLines={ouTeamLines}
         teamAName={teamA.nom}
         teamBName={teamB.nom}
       />
