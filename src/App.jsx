@@ -3188,8 +3188,9 @@ function RawExtractH2h({ teamAName, teamBName, onImport }) {
   );
 }
 
-function H2hSection({ h2h, setH2h, teamAName, teamBName, seasonProj }) {
-  const stats = computeH2hStats(h2h);
+function H2hSection({ h2h, setH2h, teamAName, teamBName, seasonProj, limitRecent, onToggleRecent, recentCount, onChangeRecentCount }) {
+  const h2hEffective = limitRecent ? h2h.slice(0, Math.max(1, Math.round(num(recentCount)) || 10)) : h2h;
+  const stats = computeH2hStats(h2hEffective);
   const update = (id, next) => setH2h(h2h.map((m) => (m.id === id ? next : m)));
   const remove = (id) => setH2h(h2h.filter((m) => m.id !== id));
   const [bulkOpen, setBulkOpen] = useState(false);
@@ -3298,6 +3299,36 @@ function H2hSection({ h2h, setH2h, teamAName, teamBName, seasonProj }) {
         <RawExtractH2h teamAName={teamAName} teamBName={teamBName} onImport={(parsed) => setH2h([...parsed, ...h2h])} />
         <PhotoExtractH2h teamAName={teamAName} teamBName={teamBName} onImport={(parsed) => setH2h([...parsed, ...h2h])} />
       </div>
+
+      {h2h.length > 6 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <button
+            onClick={onToggleRecent}
+            title={
+              limitRecent
+                ? "Désactive la limite (recalcule sur toutes les confrontations saisies, quelle que soit leur ancienneté)"
+                : "Limite les stats H2H aux confrontations les plus récentes — évite qu'un match d'un effectif disparu pèse autant qu'un match récent"
+            }
+            style={{
+              fontSize: 10,
+              color: limitRecent ? C.text : C.faint,
+              background: limitRecent ? C.text + "18" : "transparent",
+              border: `1px ${limitRecent ? "solid" : "dashed"} ${limitRecent ? C.text + "55" : C.line}`,
+              borderRadius: 6,
+              padding: "2px 6px",
+              cursor: "pointer",
+            }}
+          >
+            {limitRecent ? "✓ activé" : "+ activer"} limiter aux N confrontations les plus récentes
+          </button>
+          {limitRecent && (
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <NumInput value={recentCount} onChange={onChangeRecentCount} placeholder="10" accent={C.text} />
+              <span style={{ fontSize: 10, color: C.faint }}>confrontations (sur {h2h.length} saisies)</span>
+            </div>
+          )}
+        </div>
+      )}
 
       {h2h.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -3429,6 +3460,15 @@ function H2hSection({ h2h, setH2h, teamAName, teamBName, seasonProj }) {
 }
 
 function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, individuels, setIndividuels, h2h, setH2h, onAddBet }) {
+  // limite "N dernières confrontations" pour les calculs H2H (stats corners ET axe H2H de
+  // la probabilité normalisée) — même principe que "limiter aux N derniers matchs" déjà
+  // proposé par profil d'équipe : évite qu'un historique qui remonte à 2014 (effectifs très
+  // différents) pèse autant qu'un match d'il y a 6 mois. Suppose h2h trié du plus récent
+  // (haut) au plus ancien (bas), comme partout ailleurs dans l'app.
+  const [h2hLimitRecent, setH2hLimitRecent] = useState(false);
+  const [h2hRecentCount, setH2hRecentCount] = useState(10);
+  const h2hEffective = h2hLimitRecent ? h2h.slice(0, Math.max(1, Math.round(num(h2hRecentCount)) || 10)) : h2h;
+
   // même filtre compétition que dans le profil solo — appliqué ici aussi pour que le
   // duel reste cohérent avec ce que l'utilisateur a choisi de regarder par équipe
   const filterMatches = (team) => ({ ...team, matches: applyMatchFilters(team) });
@@ -3581,7 +3621,7 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
   // naturellement entre les deux plutôt que de trancher arbitrairement pour l'un.
   // Un contexte manquant (ex. pas encore assez de matchs à domicile) est simplement
   // absent de la moyenne, qui se renormalise sur ce qui reste (comme les autres axes).
-  const winProbH2h = computeH2hWinProb(h2h);
+  const winProbH2h = computeH2hWinProb(h2hEffective);
 
   const winProbPoissonVenue = butsProjVenue ? computePoissonMatch(butsProjVenue.projA, butsProjVenue.projB) : null;
   const winProbPoissonGlobal = butsProjGlobal ? computePoissonMatch(butsProjGlobal.projA, butsProjGlobal.projB) : null;
@@ -3992,7 +4032,17 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
         xgPerShotB={xgPerShotGlobalB}
       />
 
-      <H2hSection h2h={h2h} setH2h={setH2h} teamAName={teamA.nom} teamBName={teamB.nom} seasonProj={proj.total} />
+      <H2hSection
+        h2h={h2h}
+        setH2h={setH2h}
+        teamAName={teamA.nom}
+        teamBName={teamB.nom}
+        seasonProj={proj.total}
+        limitRecent={h2hLimitRecent}
+        onToggleRecent={() => setH2hLimitRecent(!h2hLimitRecent)}
+        recentCount={h2hRecentCount}
+        onChangeRecentCount={setH2hRecentCount}
+      />
 
       <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
         <SectionTitle>Quel cas utiliser pour le calcul ?</SectionTitle>
