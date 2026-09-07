@@ -3842,6 +3842,20 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
     ? projection(statsATotal.attDangSeries.ewmaObtenus, statsBTotal.attDangSeries.ewmaConcedes, statsBTotal.attDangSeries.ewmaObtenus, statsATotal.attDangSeries.ewmaConcedes)
     : null;
 
+  // Version BRUTE (moyenne, pas EWMA) des mêmes projections att. dangereuses — UNIQUEMENT
+  // pour décider qui domine dans les patterns favori dominé/dominant ci-dessous. Nécessaire
+  // pour que ce pattern corresponde exactement au "risque caché" déjà affiché ailleurs
+  // ("adversaire du favori plus dangereux"), qui utilise lui aussi la moyenne brute (voir
+  // SecondaryStatPanel) — sinon les deux se contredisent à l'écran sur la même question
+  // (qui est le plus dangereux), un en EWMA et l'autre en brut, illisible pour l'usager.
+  // Le calcul de MENACE (lambda utilisé dans les probabilités) reste lui en EWMA plus haut.
+  const attDangProjVenue = effA.attDangSeries && effB.attDangSeries
+    ? projection(effA.attDangSeries.moyObtenus, effB.attDangSeries.moyConcedes, effB.attDangSeries.moyObtenus, effA.attDangSeries.moyConcedes)
+    : null;
+  const attDangProjGlobal = statsATotal.attDangSeries && statsBTotal.attDangSeries
+    ? projection(statsATotal.attDangSeries.moyObtenus, statsBTotal.attDangSeries.moyConcedes, statsBTotal.attDangSeries.moyObtenus, statsATotal.attDangSeries.moyConcedes)
+    : null;
+
   // Probabilité de victoire normalisée (1X2) — voir le commentaire au-dessus de
   // combineWinProbs pour le détail.
   //
@@ -3970,19 +3984,19 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
   const favoriMatchSide = winProbCombinedRaw
     ? winProbCombinedRaw.pA > winProbCombinedRaw.pB ? "A" : winProbCombinedRaw.pB > winProbCombinedRaw.pA ? "B" : null
     : null;
-  const favoriIsDominatedAttDangVenue = attDangProjVenueEwma && favoriMatchSide
-    ? favoriMatchSide === "A" ? attDangProjVenueEwma.projB > attDangProjVenueEwma.projA : attDangProjVenueEwma.projA > attDangProjVenueEwma.projB
+  const favoriIsDominatedAttDangVenue = attDangProjVenue && favoriMatchSide
+    ? favoriMatchSide === "A" ? attDangProjVenue.projB > attDangProjVenue.projA : attDangProjVenue.projA > attDangProjVenue.projB
     : null;
-  const favoriIsDominatedAttDangGlobal = attDangProjGlobalEwma && favoriMatchSide
-    ? favoriMatchSide === "A" ? attDangProjGlobalEwma.projB > attDangProjGlobalEwma.projA : attDangProjGlobalEwma.projA > attDangProjGlobalEwma.projB
+  const favoriIsDominatedAttDangGlobal = attDangProjGlobal && favoriMatchSide
+    ? favoriMatchSide === "A" ? attDangProjGlobal.projB > attDangProjGlobal.projA : attDangProjGlobal.projA > attDangProjGlobal.projB
     : null;
   const favoriIsDominatedAttDangBoth = favoriIsDominatedAttDangVenue === true && favoriIsDominatedAttDangGlobal === true;
 
-  const favoriDominatesAttDangVenue = attDangProjVenueEwma && favoriMatchSide
-    ? favoriMatchSide === "A" ? attDangProjVenueEwma.projA > attDangProjVenueEwma.projB : attDangProjVenueEwma.projB > attDangProjVenueEwma.projA
+  const favoriDominatesAttDangVenue = attDangProjVenue && favoriMatchSide
+    ? favoriMatchSide === "A" ? attDangProjVenue.projA > attDangProjVenue.projB : attDangProjVenue.projB > attDangProjVenue.projA
     : null;
-  const favoriDominatesAttDangGlobal = attDangProjGlobalEwma && favoriMatchSide
-    ? favoriMatchSide === "A" ? attDangProjGlobalEwma.projA > attDangProjGlobalEwma.projB : attDangProjGlobalEwma.projB > attDangProjGlobalEwma.projA
+  const favoriDominatesAttDangGlobal = attDangProjGlobal && favoriMatchSide
+    ? favoriMatchSide === "A" ? attDangProjGlobal.projA > attDangProjGlobal.projB : attDangProjGlobal.projB > attDangProjGlobal.projA
     : null;
   const favoriDominatesAttDangBoth = favoriDominatesAttDangVenue === true && favoriDominatesAttDangGlobal === true;
 
