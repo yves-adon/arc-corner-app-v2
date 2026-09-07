@@ -199,7 +199,7 @@ function computeFormeProb(rcA, rcB, pDrawAnchor) {
   const shareA = 1 / (1 + Math.exp(-1.1 * delta));
   return { pA: shareA * remaining, pDraw, pB: (1 - shareA) * remaining };
 }
-function combineWinProbs({ h2h, poissonVenue, poissonGlobal, menaceVenue, menaceGlobal, formeVenue, formeGlobal, pattern }) {
+function combineWinProbs({ h2h, poissonVenue, poissonGlobal, menaceVenue, menaceGlobal, formeVenue, formeGlobal, pattern, patternWeight = 0.12 }) {
   const entries = [
     { key: "h2h", data: h2h, weight: 0.3 },
     { key: "poissonVenue", data: poissonVenue, weight: 0.175 },
@@ -208,9 +208,10 @@ function combineWinProbs({ h2h, poissonVenue, poissonGlobal, menaceVenue, menace
     { key: "menaceGlobal", data: menaceGlobal, weight: 0.1 },
     { key: "formeVenue", data: formeVenue, weight: 0.075 },
     { key: "formeGlobal", data: formeGlobal, weight: 0.075 },
-    // axe optionnel : "favori domine les att. dangereuses en dom./ext. ET global" — voir
-    // PATTERN_FAVORI_DOMINE_ATTDANG plus bas pour le détail et l'origine de ce signal.
-    { key: "pattern", data: pattern, weight: 0.12 },
+    // axe optionnel : pattern "favori dominé" ou "favori dominant" en att. dangereuses
+    // (dom./ext. ET global) — voir PATTERN_FAVORI_SOUS_PRESSION / PATTERN_FAVORI_DOMINANT
+    // plus bas. Poids différent selon lequel des deux se déclenche (patternWeight).
+    { key: "pattern", data: pattern, weight: patternWeight },
   ].filter((e) => e.data);
   if (!entries.length) return null;
   const totalWeight = entries.reduce((s, e) => s + e.weight, 0);
@@ -232,10 +233,11 @@ function combineWinProbs({ h2h, poissonVenue, poissonGlobal, menaceVenue, menace
    ressort plus que la victoire sèche — cohérent avec le "risque caché"
    préexistant "adversaire du favori plus dangereux", qui capte le même signal
    par contexte séparé ; celui-ci exige les 2 contextes à la fois et en tire
-   une vraie correction chiffrée. Contrairement aux autres axes (H2H, Buts,
-   Menace, Forme) qui sont chacun des LECTURES DIRECTES de données saisies,
-   celui-ci est une CORRECTION empirique : un a priori qualitatif ("plus de
-   nul/BTTS que prévu dans cette configuration"), pas une mesure. D'où :
+   une vraie correction chiffrée. Touche à la fois la victoire ET le BTTS.
+   Contrairement aux autres axes (H2H, Buts, Menace, Forme) qui sont chacun
+   des LECTURES DIRECTES de données saisies, celui-ci est une CORRECTION
+   empirique : un a priori qualitatif ("plus de nul/BTTS que prévu dans cette
+   configuration"), pas une mesure. D'où :
    - un poids délibérément modeste (12% côté victoire, 15% côté BTTS) — assez
      pour infléchir le résultat, pas assez pour l'écraser ;
    - des valeurs fixes (pas dérivées d'un calcul comme les autres axes) —
@@ -244,7 +246,23 @@ function combineWinProbs({ h2h, poissonVenue, poissonGlobal, menaceVenue, menace
    - actif UNIQUEMENT quand la double domination adverse est détectée, sinon
      cet axe est simplement absent (comme un axe sans données pour les
      autres). */
-const PATTERN_FAVORI_DOMINE_ATTDANG = { pFavori: 0.42, pDraw: 0.33, pOpponent: 0.25, pBtts: 0.68 };
+const PATTERN_FAVORI_SOUS_PRESSION = { pFavori: 0.42, pDraw: 0.33, pOpponent: 0.25, pBtts: 0.68 };
+
+/* ---------------------------------------------------------------
+   PATTERN "FAVORI DOMINANT EN ATTAQUES DANGEREUSES → VICTOIRE" — VALIDÉ À L'USAGE
+   ---------------------------------------------------------------
+   Cas symétrique/inverse du précédent, avec un effet DIFFÉRENT demandé par
+   l'utilisateur : quand c'est le FAVORI qui domine le volume d'attaques
+   dangereuses (dans les 2 contextes), ça renforce la conviction qu'il gagne
+   nettement — mais ça NE dit rien sur le BTTS (les deux choses sont
+   indépendantes dans ce sens-là, contrairement au cas "sous pression" ci-
+   dessus). Donc : axe supplémentaire côté victoire UNIQUEMENT, BTTS non
+   touché dans ce cas — d'où un poids plus concentré (16%, contre 12% pour
+   l'autre pattern qui se partage entre 2 sorties) et pas de champ pBtts ici.
+   Mêmes réserves que ci-dessus : valeurs fixes provisoires, à ajuster avec
+   plus de recul. */
+const PATTERN_FAVORI_DOMINANT = { pFavori: 0.78, pDraw: 0.14, pOpponent: 0.08 };
+
 /* ---------------------------------------------------------------
    BTTS & OVER/UNDER NORMALISÉS — EXPÉRIMENTAL
    ---------------------------------------------------------------
@@ -341,6 +359,7 @@ function WinProbAxisRow({ label, data, teamAName, teamBName, detail }) {
 function WinProbabilitySection({
   h2h, poissonVenue, poissonGlobal, menaceVenue, menaceGlobal, formeVenue, formeGlobal,
   combined, convAttDangA, convAttDangB, convNA, convNB, teamAName, teamBName,
+  favoriDominatesAttDangBoth, favoriName, favoriWinPct,
 }) {
   if (!combined) return null;
   const hasConv = convAttDangA !== null && convAttDangA !== undefined && convAttDangB !== null && convAttDangB !== undefined;
@@ -350,6 +369,21 @@ function WinProbabilitySection({
       <SectionTitle sub="H2H + buts (Poisson) + attaques dangereuses + forme, dom./ext. ET tous lieux · expérimental">
         Probabilité de victoire normalisée
       </SectionTitle>
+
+      {favoriDominatesAttDangBoth && favoriName && (
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 8, background: C.bg, border: `1px solid ${C.solide}55`, borderRadius: 8, padding: 10 }}>
+          <span style={{ fontSize: 14 }}>👁️</span>
+          <div style={{ fontSize: 11, color: C.dim, lineHeight: 1.5 }}>
+            <b style={{ color: C.text }}>{favoriName}</b> domine le volume d'attaques dangereuses en dom./ext. <b>ET</b>{" "}
+            tous lieux confondus — favori renforcé à <b>{(favoriWinPct * 100).toFixed(0)}%</b> (chiffre déjà corrigé
+            ci-dessous). Contrairement au cas inverse (favori dominé), ce pattern ne touche pas le BTTS.
+            <span style={{ display: "block", fontSize: 9.5, color: C.faint, fontStyle: "italic", marginTop: 3 }}>
+              Pattern validé à l'usage — intégré au calcul (16% de poids), valeurs fixes provisoires.
+            </span>
+          </div>
+        </div>
+      )}
+
       <div style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 8, padding: 10 }}>
         <ThreeWayBar
           pctVic={combined.pA * 100}
@@ -3927,13 +3961,12 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
   ];
   const bttsNormalizedRaw = combineProb(bttsSourcesBase);
 
-  // Pattern "favori DOMINÉ (pas dominant) en att. dangereuses, dom./ext. ET global → BTTS"
-  // — voir PATTERN_FAVORI_DOMINE_ATTDANG plus haut. Correction du 06/09 : la condition
-  // testait l'inverse de l'observation (favori qui domine, au lieu de favori qui SUBIT la
-  // domination adverse) — recoupé avec le "risque caché" déjà existant "adversaire du
-  // favori plus dangereux", qui est exactement ce signal-là. Détecté sur la base des
-  // chiffres BRUTS ci-dessus (avant correction), puis appliqué comme axe supplémentaire
-  // dans le calcul final.
+  // Deux patterns symétriques, effets DIFFÉRENTS (demande explicite de l'utilisateur) :
+  // - favori DOMINÉ (adversaire crée plus de danger, 2 contextes) → touche victoire ET BTTS
+  // - favori DOMINANT (lui crée plus de danger, 2 contextes)      → touche VICTOIRE SEULEMENT
+  // Détectés sur la base des chiffres BRUTS ci-dessus (avant correction), puis appliqués
+  // comme axe supplémentaire dans le calcul final. Mutuellement exclusifs par construction
+  // (si les 2 contextes ne sont pas d'accord entre eux, aucun des deux ne se déclenche).
   const favoriMatchSide = winProbCombinedRaw
     ? winProbCombinedRaw.pA > winProbCombinedRaw.pB ? "A" : winProbCombinedRaw.pB > winProbCombinedRaw.pA ? "B" : null
     : null;
@@ -3945,15 +3978,31 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
     : null;
   const favoriIsDominatedAttDangBoth = favoriIsDominatedAttDangVenue === true && favoriIsDominatedAttDangGlobal === true;
 
-  // 2e passe (finale) — ajoute l'axe pattern quand la configuration est détectée, sinon
-  // identique à la passe brute (axe simplement absent, comme les autres quand ils
-  // manquent de données).
-  const winProbPatternTriple = favoriIsDominatedAttDangBoth
-    ? favoriMatchSide === "A"
-      ? { pA: PATTERN_FAVORI_DOMINE_ATTDANG.pFavori, pDraw: PATTERN_FAVORI_DOMINE_ATTDANG.pDraw, pB: PATTERN_FAVORI_DOMINE_ATTDANG.pOpponent }
-      : { pA: PATTERN_FAVORI_DOMINE_ATTDANG.pOpponent, pDraw: PATTERN_FAVORI_DOMINE_ATTDANG.pDraw, pB: PATTERN_FAVORI_DOMINE_ATTDANG.pFavori }
+  const favoriDominatesAttDangVenue = attDangProjVenueEwma && favoriMatchSide
+    ? favoriMatchSide === "A" ? attDangProjVenueEwma.projA > attDangProjVenueEwma.projB : attDangProjVenueEwma.projB > attDangProjVenueEwma.projA
     : null;
-  const winProbCombined = favoriIsDominatedAttDangBoth
+  const favoriDominatesAttDangGlobal = attDangProjGlobalEwma && favoriMatchSide
+    ? favoriMatchSide === "A" ? attDangProjGlobalEwma.projA > attDangProjGlobalEwma.projB : attDangProjGlobalEwma.projB > attDangProjGlobalEwma.projA
+    : null;
+  const favoriDominatesAttDangBoth = favoriDominatesAttDangVenue === true && favoriDominatesAttDangGlobal === true;
+
+  // 2e passe (finale) — ajoute l'axe pattern qui correspond (sous-pression OU dominant),
+  // sinon identique à la passe brute (axe simplement absent, comme les autres quand ils
+  // manquent de données).
+  let winProbPatternTriple = null;
+  let winProbPatternWeight = 0.12;
+  if (favoriIsDominatedAttDangBoth) {
+    winProbPatternTriple = favoriMatchSide === "A"
+      ? { pA: PATTERN_FAVORI_SOUS_PRESSION.pFavori, pDraw: PATTERN_FAVORI_SOUS_PRESSION.pDraw, pB: PATTERN_FAVORI_SOUS_PRESSION.pOpponent }
+      : { pA: PATTERN_FAVORI_SOUS_PRESSION.pOpponent, pDraw: PATTERN_FAVORI_SOUS_PRESSION.pDraw, pB: PATTERN_FAVORI_SOUS_PRESSION.pFavori };
+    winProbPatternWeight = 0.12;
+  } else if (favoriDominatesAttDangBoth) {
+    winProbPatternTriple = favoriMatchSide === "A"
+      ? { pA: PATTERN_FAVORI_DOMINANT.pFavori, pDraw: PATTERN_FAVORI_DOMINANT.pDraw, pB: PATTERN_FAVORI_DOMINANT.pOpponent }
+      : { pA: PATTERN_FAVORI_DOMINANT.pOpponent, pDraw: PATTERN_FAVORI_DOMINANT.pDraw, pB: PATTERN_FAVORI_DOMINANT.pFavori };
+    winProbPatternWeight = 0.16;
+  }
+  const winProbCombined = winProbPatternTriple
     ? combineWinProbs({
         h2h: winProbH2h,
         poissonVenue: winProbPoissonVenue,
@@ -3963,11 +4012,14 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
         formeVenue: winProbFormeVenue,
         formeGlobal: winProbFormeGlobal,
         pattern: winProbPatternTriple,
+        patternWeight: winProbPatternWeight,
       })
     : winProbCombinedRaw;
 
+  // BTTS : seul le pattern "favori sous pression" y touche — "favori dominant" ne dit rien
+  // sur le BTTS (demande explicite), donc BTTS reste sur le calcul brut dans ce cas.
   const bttsNormalized = favoriIsDominatedAttDangBoth
-    ? combineProb([...bttsSourcesBase, { key: "pattern", p: PATTERN_FAVORI_DOMINE_ATTDANG.pBtts, weight: 0.15 }])
+    ? combineProb([...bttsSourcesBase, { key: "pattern", p: PATTERN_FAVORI_SOUS_PRESSION.pBtts, weight: 0.15 }])
     : bttsNormalizedRaw;
 
   const favoriMenaceButsGap =
@@ -4153,6 +4205,9 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
         convNB={convDisplayB ? convDisplayB.n : null}
         teamAName={teamA.nom}
         teamBName={teamB.nom}
+        favoriDominatesAttDangBoth={favoriDominatesAttDangBoth}
+        favoriName={favoriMatchSide === "A" ? teamA.nom : favoriMatchSide === "B" ? teamB.nom : null}
+        favoriWinPct={favoriMatchSide === "A" ? winProbCombined?.pA : favoriMatchSide === "B" ? winProbCombined?.pB : null}
       />
 
       <OuBttsSection
