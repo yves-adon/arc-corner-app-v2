@@ -471,11 +471,11 @@ function OuProbBar({ p }) {
   );
 }
 
-function OuTeamLineRow({ line, pA, pB, teamAName, teamBName }) {
+function OuTeamLineRow({ line, label, pA, pB, teamAName, teamBName }) {
   const ready = pA && pB;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-      <div style={{ fontSize: 10.5, color: C.faint }}>Plus de {line} but{line >= 1 ? "s" : ""}</div>
+      <div style={{ fontSize: 10.5, color: C.faint }}>{label || `Plus de ${line} but${line >= 1 ? "s" : ""}`}</div>
       {ready ? (
         <>
           <div style={{ display: "flex", justifyContent: "space-between", fontFamily: FONT_MONO, fontSize: 12.5 }}>
@@ -521,6 +521,17 @@ function OuBttsSection({ btts, totalLines, teamLines, teamAName, teamBName, favo
         <OuProbBar p={btts} />
       </div>
 
+      {teamLines[0] && teamLines[0].line === 0.5 && (teamLines[0].pA || teamLines[0].pB) && (
+        <OuTeamLineRow
+          label="Fail to score normalisé (n'a pas marqué)"
+          line={null}
+          pA={teamLines[0].pA ? { p: 1 - teamLines[0].pA.p } : null}
+          pB={teamLines[0].pB ? { p: 1 - teamLines[0].pB.p } : null}
+          teamAName={teamAName}
+          teamBName={teamBName}
+        />
+      )}
+
       <div style={{ display: "flex", flexDirection: "column", gap: 6, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
         <div style={{ fontSize: 10, color: C.faint, textTransform: "uppercase", letterSpacing: 0.5 }}>Buts du match (total)</div>
         {totalLines.map(({ line, data }) => (
@@ -544,6 +555,119 @@ function OuBttsSection({ btts, totalLines, teamLines, teamAName, teamBName, favo
         disponible — pas de "Forme (RC)" ici, un écart de forme signé ne se traduit pas directement en probabilité
         de buts. Une équipe peut ressortir favorite au résultat tout en ayant un BTTS élevé : les deux infos sont
         indépendantes, d'où ce visuel séparé plutôt que noyé dans la probabilité de victoire.
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------
+   SIGNAL "NUL MI-TEMPS" (règle PPG) — EXTERNE, PAS UNE PROBABILITÉ
+   ---------------------------------------------------------------
+   Règle fournie par l'utilisateur (méthode externe, pas dérivée des données de
+   l'app) : si les deux équipes ont un niveau très proche sur la saison (écart
+   PPG ≤ 0.40) MAIS un écart marqué en forme récente (écart PPG ≥ 1.00 sur les
+   5 derniers matchs), l'équipe "en méforme" cherche souvent à casser sa
+   mauvaise série sans se découvrir, d'où un verrouillage fréquent à la
+   mi-temps. Affiché en badge validé/non-validé, PAS en pourcentage — l'app ne
+   suit pas les buts par mi-temps (seulement les corners), donc aucune
+   fréquence réelle de nul à la mi-temps n'est calculable pour l'instant. */
+function SignalNulMiTemps({
+  ppgGlobalA, ppgGlobalB, ppgRecentA, ppgRecentB, ppgGapGlobal, ppgGapRecent, signal, teamAName, teamBName,
+  ppgMT1A, ppgMT1B, ppgGapMT1, nulMT1PctA, nulMT1PctB, nulMT1NA, nulMT1NB, underMT1PctA, underMT1PctB, underMT1NA, underMT1NB,
+}) {
+  if (signal === null || signal === undefined) return null;
+  const hasMT1Data = (ppgMT1A !== null && ppgMT1A !== undefined) || (ppgMT1B !== null && ppgMT1B !== undefined);
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+      <SectionTitle sub="règle PPG externe · pas une probabilité, pas de données buts 1MT">Signal Nul Mi-temps (PPG)</SectionTitle>
+
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          background: C.bg,
+          border: `1px solid ${signal ? C.solide : C.line}${signal ? "" : "55"}`,
+          borderRadius: 8,
+          padding: 10,
+        }}
+      >
+        <span style={{ fontSize: 18 }}>{signal ? "🔒" : "—"}</span>
+        <div style={{ fontSize: 12, color: signal ? C.solide : C.faint, fontWeight: signal ? 700 : 400 }}>
+          {signal ? "Signal validé — configuration favorable à un verrouillage à la mi-temps" : "Signal non validé pour ce match"}
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, fontFamily: FONT_MONO, fontSize: 11.5 }}>
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ color: C.faint }}>PPG saison (10 matchs)</span>
+          <span>
+            <span style={{ color: C.teamA }}>{ppgGlobalA !== null && ppgGlobalA !== undefined ? ppgGlobalA.toFixed(2) : "—"}</span>
+            {" / "}
+            <span style={{ color: C.teamB }}>{ppgGlobalB !== null && ppgGlobalB !== undefined ? ppgGlobalB.toFixed(2) : "—"}</span>
+          </span>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ color: C.faint }}>écart</span>
+          <span style={{ color: ppgGapGlobal !== null && ppgGapGlobal <= 0.4 ? C.solide : C.text }}>
+            {ppgGapGlobal !== null ? ppgGapGlobal.toFixed(2) : "—"} <span style={{ color: C.faint }}>(seuil ≤ 0.40)</span>
+          </span>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
+          <span style={{ color: C.faint }}>PPG récent (5 matchs)</span>
+          <span>
+            <span style={{ color: C.teamA }}>{ppgRecentA !== null && ppgRecentA !== undefined ? ppgRecentA.toFixed(2) : "—"}</span>
+            {" / "}
+            <span style={{ color: C.teamB }}>{ppgRecentB !== null && ppgRecentB !== undefined ? ppgRecentB.toFixed(2) : "—"}</span>
+          </span>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ color: C.faint }}>écart</span>
+          <span style={{ color: ppgGapRecent !== null && ppgGapRecent >= 1 ? C.solide : C.text }}>
+            {ppgGapRecent !== null ? ppgGapRecent.toFixed(2) : "—"} <span style={{ color: C.faint }}>(seuil ≥ 1.00)</span>
+          </span>
+        </div>
+      </div>
+
+      {hasMT1Data && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, fontFamily: FONT_MONO, fontSize: 11.5, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
+          <div style={{ fontSize: 10, color: C.faint, fontFamily: FONT_BODY }}>
+            Contexte mi-temps réelle (buts 1MT saisis) — affiché à titre indicatif, ne conditionne pas le badge ci-dessus :
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
+            <span style={{ color: C.faint }}>PPG mi-temps</span>
+            <span>
+              <span style={{ color: C.teamA }}>{ppgMT1A !== null && ppgMT1A !== undefined ? ppgMT1A.toFixed(2) : "—"}</span>
+              {" / "}
+              <span style={{ color: C.teamB }}>{ppgMT1B !== null && ppgMT1B !== undefined ? ppgMT1B.toFixed(2) : "—"}</span>
+              {ppgGapMT1 !== null && <span style={{ color: C.faint }}> (écart {ppgGapMT1.toFixed(2)})</span>}
+            </span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
+            <span style={{ color: C.faint }}>Taux de nul à la pause</span>
+            <span>
+              {nulMT1PctA !== null && <span style={{ color: C.teamA }}>{nulMT1PctA.toFixed(0)}% ({nulMT1NA})</span>}
+              {nulMT1PctA !== null && nulMT1PctB !== null && " / "}
+              {nulMT1PctB !== null && <span style={{ color: C.teamB }}>{nulMT1PctB.toFixed(0)}% ({nulMT1NB})</span>}
+            </span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
+            <span style={{ color: C.faint }}>Under 1.5 buts à la MT</span>
+            <span>
+              {underMT1PctA !== null && <span style={{ color: C.teamA }}>{underMT1PctA.toFixed(0)}% ({underMT1NA})</span>}
+              {underMT1PctA !== null && underMT1PctB !== null && " / "}
+              {underMT1PctB !== null && <span style={{ color: C.teamB }}>{underMT1PctB.toFixed(0)}% ({underMT1NB})</span>}
+            </span>
+          </div>
+        </div>
+      )}
+
+      <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic" }}>
+        Badge = règle externe reprise telle quelle (écart PPG saison ≤ 0.40 ET écart PPG récent ≥ 1.00), pas mélangée
+        à la probabilité de victoire normalisée. Le contexte mi-temps ci-dessus (quand des buts 1MT sont saisis) est
+        purement informatif pour l'instant — pas encore assez de matchs validés pour en faire une 3e condition
+        bloquante comme le reste du signal ; dis-le moi si tu veux durcir vers un vrai "ET" une fois que tu l'auras
+        recoupé avec des résultats réels.
       </div>
     </div>
   );
@@ -982,9 +1106,18 @@ function computeOverUnder(matches, obtKey, concKey, line) {
 /* Points par match (PPG) — dérivé directement de vndButs (3×Vic + 1×Nul, divisé par n),
    aucune nouvelle donnée nécessaire : c'est juste une autre lecture du Vic/Nul/Déf déjà
    calculé, dans le format standard utilisé par la plupart des sites de stats. */
+/* PPG sur une fenêtre RÉCENTE fixe (4-6 matchs, indépendante du filtre "limiter aux N
+   derniers" de l'utilisateur) — sert uniquement au signal Nul Mi-temps ci-dessous, qui a
+   besoin de comparer un PPG "saison" à un PPG "forme courte" sur une fenêtre précise et
+   constante, pas sur un réglage qui varie d'un match à l'autre. */
 function ppgFromVnd(vnd) {
   if (!vnd || !vnd.n) return null;
   return (vnd.vic * 3 + vnd.nul * 1) / vnd.n;
+}
+
+function ppgRecent(matches, obtKey, concKey, n = 5) {
+  const recent = (matches || []).slice(0, n);
+  return ppgFromVnd(computeVND(recent, obtKey, concKey));
 }
 
 /* Clean sheet % — fréquence des matchs sans but encaissé, sur l'historique propre de
@@ -995,6 +1128,18 @@ function computeCleanSheet(matches, concKey) {
   if (!n) return null;
   const cs = valid.filter((m) => num(m[concKey]) === 0).length;
   return { n, cs, pct: (cs / n) * 100 };
+}
+
+/* Fail to score % (échec à marquer) — fréquence des matchs où l'équipe n'a PAS marqué,
+   sur son historique propre. Symétrique de Clean sheet (0 encaissé) mais côté attaque
+   (0 marqué) ; les deux se lisent ensemble : une équipe peut avoir un Clean sheet élevé
+   ET un Fail to score élevé (verrouillée des deux côtés, souvent des 0-0). */
+function computeFailToScore(matches, obtKey) {
+  const valid = matches.filter((m) => m[obtKey] !== "" && m[obtKey] !== undefined);
+  const n = valid.length;
+  if (!n) return null;
+  const fts = valid.filter((m) => num(m[obtKey]) === 0).length;
+  return { n, fts, pct: (fts / n) * 100 };
 }
 
 /* BTTS % (Both Teams To Score) — fréquence des matchs où l'équipe a marqué ET encaissé
@@ -1106,8 +1251,17 @@ function computeHistoryStats(matches, alpha = 0.25, includeAdvanced = true) {
   // taux Over/Under buts réel sur ligne fixe 2.5 — voir commentaire sur computeOverUnder
   const ouButs25 = computeOverUnder(matches, "butsObtenus", "butsConcedes", 2.5);
   const csButs = computeCleanSheet(matches, "butsConcedes");
+  const ftsButs = computeFailToScore(matches, "butsObtenus");
   const bttsButs = computeBTTS(matches, "butsObtenus", "butsConcedes");
   const ppgButs = ppgFromVnd(vndButs);
+  // Mi-temps (buts) — pour le Signal Nul Mi-temps : PPG mi-temps (résultat à la pause
+  // traité comme un mini-match, 3/1/0 pts), taux de nul à la pause (inclus dans vndMT1Buts
+  // via .nul/.n), et taux Under 1.5 à la pause. Réutilise TELLES QUELLES les fonctions déjà
+  // là pour le reste de l'app (computeVND, ppgFromVnd, computeOverUnder) — aucune nouvelle
+  // fonction nécessaire, juste les pointer sur les champs buts1MT.
+  const vndMT1Buts = computeVND(matches, "buts1MTObtenus", "buts1MTConcedes");
+  const ppgMT1Buts = ppgFromVnd(vndMT1Buts);
+  const ouMT1_15 = computeOverUnder(matches, "buts1MTObtenus", "buts1MTConcedes", 1.5);
   // xG (expected goals) — entièrement optionnel, saisi à la main match par match (champ
   // "tirs/att. dangereuses/xG" avancé) ; computeStatSeries filtre déjà automatiquement
   // aux matchs où les deux valeurs sont renseignées, donc null tant qu'aucun xG n'a été
@@ -1131,6 +1285,10 @@ function computeHistoryStats(matches, alpha = 0.25, includeAdvanced = true) {
     vndButs,
     ouButs25,
     csButs,
+    ftsButs,
+    vndMT1Buts,
+    ppgMT1Buts,
+    ouMT1_15,
     bttsButs,
     ppgButs,
     xGSeries,
@@ -1185,6 +1343,10 @@ function pickVenueStats(team, venue, minN = 3) {
       vndButs: venueStats.vndButs,
       ouButs25: venueStats.ouButs25,
       csButs: venueStats.csButs,
+      ftsButs: venueStats.ftsButs,
+      vndMT1Buts: venueStats.vndMT1Buts,
+      ppgMT1Buts: venueStats.ppgMT1Buts,
+      ouMT1_15: venueStats.ouMT1_15,
       bttsButs: venueStats.bttsButs,
       ppgButs: venueStats.ppgButs,
       xGSeries: venueStats.xGSeries,
@@ -1211,12 +1373,16 @@ function pickVenueStats(team, venue, minN = 3) {
       vndButs: overall.vndButs,
       ouButs25: overall.ouButs25,
       csButs: overall.csButs,
+      ftsButs: overall.ftsButs,
+      vndMT1Buts: overall.vndMT1Buts,
+      ppgMT1Buts: overall.ppgMT1Buts,
+      ouMT1_15: overall.ouMT1_15,
       bttsButs: overall.bttsButs,
       ppgButs: overall.ppgButs,
       xGSeries: overall.xGSeries,
     };
   }
-  return { nom: team.nom, obtenus: num(team.obtenus), concedes: num(team.concedes), part: team.part, ewma: team.ewma, volatilite: null, source: "manuel", n: 0, tirsSeries: null, attDangSeries: null, mt1Series: null, mt2Series: null, vndTotal: null, vndMT1: null, vndMT2: null, butsSeries: null, vndButs: null, ouButs25: null, csButs: null, bttsButs: null, ppgButs: null, xGSeries: null };
+  return { nom: team.nom, obtenus: num(team.obtenus), concedes: num(team.concedes), part: team.part, ewma: team.ewma, volatilite: null, source: "manuel", n: 0, tirsSeries: null, attDangSeries: null, mt1Series: null, mt2Series: null, vndTotal: null, vndMT1: null, vndMT2: null, butsSeries: null, vndButs: null, ouButs25: null, csButs: null, ftsButs: null, vndMT1Buts: null, ppgMT1Buts: null, ouMT1_15: null, bttsButs: null, ppgButs: null, xGSeries: null };
 }
 
 /* Variante pour les confrontations directes : on connaît les 2 équipes précises,
@@ -1802,6 +1968,142 @@ function PdfExtractTotalCorner({ teamName, color, onImport, onTeamNameDetected }
   );
 }
 
+/* ---------------------------------------------------------------
+   IMPORT DEPUIS GEMINI (ou tout texte au format "DD/MM/YYYY vs Adversaire : X - Y (A - B)")
+   ---------------------------------------------------------------
+   Format naturel que sort Gemini quand on lui demande l'historique d'une équipe — collé
+   TEL QUEL, souvent sans aucun retour à la ligne entre les matchs (une seule ligne de
+   texte), avec parfois le prochain match à venir sans score ("Match ce soir") et des
+   footnotes de sources en fin de texte ([1] (url), [2] (url)...). Le parseur ne dépend
+   d'AUCUN retour à la ligne : il retrouve chaque match par motif (date + "vs" + score),
+   peu importe le formatage, et ignore silencieusement tout ce qui ne matche pas (match à
+   venir sans score, footnotes).
+   Fusion avec les matchs DÉJÀ saisis (par ex. via TotalCorner, qui a les corners/tirs mais
+   pas la mi-temps) plutôt que doublon : les entrées sont dans le même ordre (plus récent
+   en haut) que le reste de l'app, donc fusion par POSITION — avec le score complet comme
+   garde-fou : si le score de la ligne collée ne correspond pas au match déjà en place à
+   cette position, la ligne est ignorée plutôt que d'écraser au mauvais endroit. Un match
+   collé au-delà de ce qui existe déjà crée une nouvelle ligne (date + score + mi-temps
+   seulement, le reste à compléter à la main si besoin). */
+function parseGeminiMatchHistory(text) {
+  const re = /(\d{2})\/(\d{2})\/(\d{4})\s+vs\s+(?:(?!\d{2}\/\d{2}\/\d{4}).)+?\s*:\s*(\d+)\s*-\s*(\d+)\s*(?:\((\d+)\s*-\s*(\d+)\))?/g;
+  const results = [];
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const [, dd, mm, , ftA, ftB, htA, htB] = m;
+    results.push({
+      date: `${mm}/${dd}`,
+      butsObtenus: ftA,
+      butsConcedes: ftB,
+      buts1MTObtenus: htA !== undefined ? htA : "",
+      buts1MTConcedes: htB !== undefined ? htB : "",
+    });
+  }
+  return results;
+}
+
+function mergeGeminiMatchHistory(matches, parsed) {
+  const merged = [...matches];
+  let filled = 0;
+  let created = 0;
+  let skipped = 0;
+  parsed.forEach((p, i) => {
+    if (i < merged.length) {
+      const existing = merged[i];
+      const ftMatches =
+        existing.butsObtenus !== "" && existing.butsObtenus !== undefined &&
+        num(existing.butsObtenus) === num(p.butsObtenus) && num(existing.butsConcedes) === num(p.butsConcedes);
+      const ftEmpty = existing.butsObtenus === "" || existing.butsObtenus === undefined;
+      if (ftMatches || ftEmpty) {
+        merged[i] = {
+          ...existing,
+          butsObtenus: existing.butsObtenus !== "" && existing.butsObtenus !== undefined ? existing.butsObtenus : p.butsObtenus,
+          butsConcedes: existing.butsConcedes !== "" && existing.butsConcedes !== undefined ? existing.butsConcedes : p.butsConcedes,
+          buts1MTObtenus: p.buts1MTObtenus,
+          buts1MTConcedes: p.buts1MTConcedes,
+          date: existing.date || p.date,
+        };
+        filled++;
+      } else {
+        skipped++;
+      }
+    } else {
+      merged.push({
+        id: uid(),
+        obtenus: "", concedes: "", lieu: "",
+        tirsObtenus: "", tirsConcedes: "",
+        attDangObtenus: "", attDangConcedes: "",
+        corners1MTObtenus: "", corners1MTConcedes: "", corners2MTObtenus: "", corners2MTConcedes: "",
+        butsObtenus: p.butsObtenus, butsConcedes: p.butsConcedes,
+        buts1MTObtenus: p.buts1MTObtenus, buts1MTConcedes: p.buts1MTConcedes,
+        xGObtenus: "", xGConcedes: "", ligue: "", date: p.date,
+      });
+      created++;
+    }
+  });
+  return { merged, filled, created, skipped };
+}
+
+function PasteGeminiMT1({ matches, setMatches }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [info, setInfo] = useState("");
+  const [error, setError] = useState("");
+
+  const run = () => {
+    const parsed = parseGeminiMatchHistory(text);
+    if (!parsed.length) {
+      setError('Aucun match reconnu — le texte doit contenir des lignes du type "30/08/2026 vs Valence CF : 2 - 1 (1 - 0)".');
+      return;
+    }
+    const { merged, filled, created, skipped } = mergeGeminiMatchHistory(matches, parsed);
+    setMatches(merged);
+    setInfo(
+      `${filled} match${filled > 1 ? "s" : ""} complété${filled > 1 ? "s" : ""} (buts 1ère mi-temps)${created ? ` · ${created} nouveau${created > 1 ? "x" : ""} match${created > 1 ? "s" : ""} créé${created > 1 ? "s" : ""}` : ""}${skipped ? ` · ${skipped} ligne(s) ignorée(s) (score final différent de ce qui était déjà saisi à cette position)` : ""}. Vérifie le résultat.`
+    );
+    setError("");
+    setText("");
+    setOpen(false);
+  };
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        style={{ fontSize: 10, color: C.faint, background: "transparent", border: `1px solid ${C.line}`, borderRadius: 6, padding: "2px 6px", cursor: "pointer", flexShrink: 0 }}
+      >
+        Coller depuis Gemini (buts 1MT)
+      </button>
+    );
+  }
+  return (
+    <div style={{ background: C.surface2, border: `1px solid ${C.line}`, borderRadius: 8, padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ fontSize: 10.5, color: C.dim, lineHeight: 1.4 }}>
+        Colle le texte tel quel — peu importe s'il n'y a aucun retour à la ligne. Reconnaît le format{" "}
+        <span style={{ fontFamily: FONT_MONO }}>DD/MM/YYYY vs Adversaire : X - Y (A - B)</span>. Complète la mi-temps
+        des matchs déjà saisis (recoupés par score complet), et ajoute les matchs manquants.
+      </div>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        rows={5}
+        placeholder="30/08/2026 vs Valence CF : 2 - 1 (1 - 0)23/08/2026 vs Real Betis : 3 - 0 (2 - 0)..."
+        style={{ width: "100%", background: C.bg, border: `1px solid ${C.line}`, borderRadius: 6, padding: 8, color: C.text, fontFamily: FONT_MONO, fontSize: 11, resize: "vertical" }}
+      />
+      {error && <div style={{ fontSize: 11, color: C.fragile }}>{error}</div>}
+      {info && <div style={{ fontSize: 11, color: C.jouable }}>{info}</div>}
+      <div style={{ display: "flex", gap: 6 }}>
+        <button onClick={run} style={{ background: C.solide + "22", border: `1px solid ${C.solide}55`, borderRadius: 6, padding: "6px 10px", color: C.solide, fontSize: 12, cursor: "pointer", fontWeight: 700 }}>
+          Importer
+        </button>
+        <button onClick={() => setOpen(false)} style={{ background: "transparent", border: `1px solid ${C.line}`, borderRadius: 6, padding: "6px 10px", color: C.dim, fontSize: 12, cursor: "pointer" }}>
+          Annuler
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function MatchHistoryRows({ matches, setMatches, color, teamName, useAdvanced, onToggleAdvanced, excludedLigues, onToggleLigue, onTeamNameDetected, limitRecent, recentCount, onToggleRecent, onChangeRecentCount }) {
   const update = (id, next) => setMatches(matches.map((m) => (m.id === id ? next : m)));
   const remove = (id) => setMatches(matches.filter((m) => m.id !== id));
@@ -1820,6 +2122,7 @@ function MatchHistoryRows({ matches, setMatches, color, teamName, useAdvanced, o
         <div style={{ display: "flex", gap: 6 }}>
           <RawExtractTotalCorner teamName={teamName} color={color} onImport={(parsed) => setMatches([...parsed, ...matches])} onTeamNameDetected={onTeamNameDetected} />
           <PdfExtractTotalCorner teamName={teamName} color={color} onImport={(parsed) => setMatches([...parsed, ...matches])} onTeamNameDetected={onTeamNameDetected} />
+          <PasteGeminiMT1 matches={matches} setMatches={setMatches} />
           {matches.length > 1 && (
             <button
               onClick={() => setMatches([...matches].reverse())}
@@ -1949,6 +2252,10 @@ function MatchHistoryRows({ matches, setMatches, color, teamName, useAdvanced, o
                 <NumInput value={m.butsConcedes || ""} onChange={(v) => update(m.id, { ...m, butsConcedes: v })} placeholder="buts conc." accent={C.faint} />
               </div>
               <div style={{ display: "flex", gap: 5, alignItems: "center", paddingLeft: 18 }}>
+                <NumInput value={m.buts1MTObtenus || ""} onChange={(v) => update(m.id, { ...m, buts1MTObtenus: v })} placeholder="buts 1MT obt." accent={C.faint} />
+                <NumInput value={m.buts1MTConcedes || ""} onChange={(v) => update(m.id, { ...m, buts1MTConcedes: v })} placeholder="buts 1MT conc." accent={C.faint} />
+              </div>
+              <div style={{ display: "flex", gap: 5, alignItems: "center", paddingLeft: 18 }}>
                 <NumInput value={m.xGObtenus || ""} onChange={(v) => update(m.id, { ...m, xGObtenus: v })} placeholder="xG créé" accent={C.faint} />
                 <NumInput value={m.xGConcedes || ""} onChange={(v) => update(m.id, { ...m, xGConcedes: v })} placeholder="xG concédé" accent={C.faint} />
               </div>
@@ -1957,7 +2264,7 @@ function MatchHistoryRows({ matches, setMatches, color, teamName, useAdvanced, o
         </div>
       ))}
       <button
-        onClick={() => setMatches([{ id: uid(), obtenus: "", concedes: "", lieu: "", tirsObtenus: "", tirsConcedes: "", attDangObtenus: "", attDangConcedes: "", corners1MTObtenus: "", corners1MTConcedes: "", corners2MTObtenus: "", corners2MTConcedes: "", butsObtenus: "", butsConcedes: "", xGObtenus: "", xGConcedes: "", ligue: "", date: "" }, ...matches])}
+        onClick={() => setMatches([{ id: uid(), obtenus: "", concedes: "", lieu: "", tirsObtenus: "", tirsConcedes: "", attDangObtenus: "", attDangConcedes: "", corners1MTObtenus: "", corners1MTConcedes: "", corners2MTObtenus: "", corners2MTConcedes: "", butsObtenus: "", butsConcedes: "", buts1MTObtenus: "", buts1MTConcedes: "", xGObtenus: "", xGConcedes: "", ligue: "", date: "" }, ...matches])}
         style={{ ...addRowStyle(), marginTop: 0, padding: "7px", fontSize: 12 }}
       >
         <Plus size={12} /> Ajouter un match
@@ -2538,7 +2845,7 @@ function MiTempsRecommendation({ recMT1, recMT2, teamAName, teamBName, matchLabe
    attaques dangereuses — entièrement optionnel, n'apparaît que si les deux équipes ont
    assez de données saisies. Contexte domicile/extérieur déjà pris en compte puisque
    seriesA/seriesB viennent de pickVenueStats, comme pour les corners. */
-function SecondaryStatPanel({ label, unit, seriesA, seriesB, sourceA, sourceB, teamAName, teamBName, showHandicapSignal = false, showRatioVerdict = false, showFormLabels = false, showXgExtras = false, crossVenueAgree = null, vndA = null, vndB = null, ouFixedA = null, ouFixedB = null, ouDynamicA = null, ouDynamicB = null, ppgA = null, ppgB = null, csA = null, csB = null, bttsA = null, bttsB = null, leagueAvg = null, xgFinishA = null, xgFinishB = null, xgPerShotA = null, xgPerShotB = null, attDangA = null, attDangB = null }) {
+function SecondaryStatPanel({ label, unit, seriesA, seriesB, sourceA, sourceB, teamAName, teamBName, showHandicapSignal = false, showRatioVerdict = false, showFormLabels = false, showXgExtras = false, crossVenueAgree = null, vndA = null, vndB = null, ouFixedA = null, ouFixedB = null, ouDynamicA = null, ouDynamicB = null, ppgA = null, ppgB = null, csA = null, csB = null, ftsA = null, ftsB = null, bttsA = null, bttsB = null, leagueAvg = null, xgFinishA = null, xgFinishB = null, xgPerShotA = null, xgPerShotB = null, attDangA = null, attDangB = null }) {
   if (!seriesA || !seriesB) return null;
   const proj = projection(seriesA.moyObtenus, seriesB.moyConcedes, seriesB.moyObtenus, seriesA.moyConcedes);
   const volCombined = seriesA.volatilite || seriesB.volatilite ? Math.sqrt(seriesA.volatilite ** 2 + seriesB.volatilite ** 2) : null;
@@ -2792,22 +3099,24 @@ function SecondaryStatPanel({ label, unit, seriesA, seriesB, sourceA, sourceB, t
         </div>
       )}
 
-      {(ppgA !== null || ppgB !== null || csA || csB || bttsA || bttsB) && (
+      {(ppgA !== null || ppgB !== null || csA || csB || ftsA || ftsB || bttsA || bttsB) && (
         <div style={{ display: "flex", flexDirection: "column", gap: 5, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
-          <span style={{ fontSize: 10, color: C.faint }}>PPG · Clean sheet · BTTS (historique propre de chaque équipe) :</span>
-          {(ppgA !== null || csA || bttsA) && (
+          <span style={{ fontSize: 10, color: C.faint }}>PPG · Clean sheet · Fail to score · BTTS (historique propre de chaque équipe) :</span>
+          {(ppgA !== null || csA || ftsA || bttsA) && (
             <div style={{ fontSize: 11, fontFamily: FONT_MONO, color: C.dim, display: "flex", flexWrap: "wrap", gap: 4 }}>
               <span style={{ color: C.teamA, marginRight: 4 }}>{teamAName || "Équipe A"}</span>
               {ppgA !== null && <span>PPG <b style={{ color: C.text }}>{ppgA.toFixed(2)}</b></span>}
               {csA && <span>· Clean sheet <b style={{ color: C.text }}>{csA.pct.toFixed(0)}%</b> ({csA.n})</span>}
+              {ftsA && <span>· Fail to score <b style={{ color: C.text }}>{ftsA.pct.toFixed(0)}%</b> ({ftsA.n})</span>}
               {bttsA && <span>· BTTS <b style={{ color: C.text }}>{bttsA.pct.toFixed(0)}%</b> ({bttsA.n})</span>}
             </div>
           )}
-          {(ppgB !== null || csB || bttsB) && (
+          {(ppgB !== null || csB || ftsB || bttsB) && (
             <div style={{ fontSize: 11, fontFamily: FONT_MONO, color: C.dim, display: "flex", flexWrap: "wrap", gap: 4 }}>
               <span style={{ color: C.teamB, marginRight: 4 }}>{teamBName || "Équipe B"}</span>
               {ppgB !== null && <span>PPG <b style={{ color: C.text }}>{ppgB.toFixed(2)}</b></span>}
               {csB && <span>· Clean sheet <b style={{ color: C.text }}>{csB.pct.toFixed(0)}%</b> ({csB.n})</span>}
+              {ftsB && <span>· Fail to score <b style={{ color: C.text }}>{ftsB.pct.toFixed(0)}%</b> ({ftsB.n})</span>}
               {bttsB && <span>· BTTS <b style={{ color: C.text }}>{bttsB.pct.toFixed(0)}%</b> ({bttsB.n})</span>}
             </div>
           )}
@@ -4041,6 +4350,24 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
       ? { favoriName: favoriMatchSide === "A" ? teamA.nom : teamB.nom, bttsPct: bttsNormalized.p, favoriWinPct: favoriMatchSide === "A" ? winProbCombined.pA : winProbCombined.pB }
       : null;
 
+  // Signal "Nul Mi-temps" (règle PPG) — RÈGLE EXTERNE fournie par l'utilisateur, pas un
+  // calcul dérivé des données de l'app comme le reste : aucun champ "buts 1ère mi-temps"
+  // n'existe dans le formulaire de saisie (seuls les corners sont suivis par mi-temps),
+  // donc impossible de calculer une vraie fréquence empirique de nul à la mi-temps sur
+  // l'historique — ce signal reste un simple booléen (validé / non validé), pas une
+  // probabilité, et n'est PAS injecté dans la probabilité normalisée ci-dessus (rien à y
+  // mélanger sans données de mi-temps réelles). Si un jour tu veux une vraie probabilité
+  // ici, il faudrait ajouter un champ "buts 1MT obt./conc." à la saisie des matchs, comme
+  // ça existe déjà pour les corners.
+  // Règle : écart PPG saison (10 matchs) <= 0.40 ET écart PPG récent (ici 5 matchs) >= 1.00.
+  const ppgGlobalA = statsATotal.ppgButs;
+  const ppgGlobalB = statsBTotal.ppgButs;
+  const ppgRecentA = ppgRecent(filterMatches(teamA).matches, "butsObtenus", "butsConcedes", 5);
+  const ppgRecentB = ppgRecent(filterMatches(teamB).matches, "butsObtenus", "butsConcedes", 5);
+  const ppgGapGlobal = ppgGlobalA !== null && ppgGlobalB !== null ? Math.abs(ppgGlobalA - ppgGlobalB) : null;
+  const ppgGapRecent = ppgRecentA !== null && ppgRecentB !== null ? Math.abs(ppgRecentA - ppgRecentB) : null;
+  const signalNulMT1 = ppgGapGlobal !== null && ppgGapRecent !== null ? ppgGapGlobal <= 0.4 && ppgGapRecent >= 1.0 : null;
+
   const ouTotalLines = OU_TOTAL_LINES.map((line) => {
     const h2hRate = h2hEmpiricalOverRate(h2hEffective, "total", line);
     const data = combineProb([
@@ -4234,6 +4561,18 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
         favoriMenaceButsGap={favoriMenaceButsGap}
       />
 
+      <SignalNulMiTemps
+        ppgGlobalA={ppgGlobalA}
+        ppgGlobalB={ppgGlobalB}
+        ppgRecentA={ppgRecentA}
+        ppgRecentB={ppgRecentB}
+        ppgGapGlobal={ppgGapGlobal}
+        ppgGapRecent={ppgGapRecent}
+        signal={signalNulMT1}
+        teamAName={teamA.nom}
+        teamBName={teamB.nom}
+      />
+
       <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", gap: 10 }}>
         <Flag size={16} color={C.dim} style={{ flexShrink: 0, marginTop: 2 }} />
         <div style={{ fontSize: 12, color: C.dim, lineHeight: 1.5 }}>
@@ -4343,6 +4682,8 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
         ppgB={effB.ppgButs}
         csA={effA.csButs}
         csB={effB.csButs}
+        ftsA={effA.ftsButs}
+        ftsB={effB.ftsButs}
         bttsA={effA.bttsButs}
         bttsB={effB.bttsButs}
         attDangA={effA.attDangSeries}
@@ -4372,6 +4713,8 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
         ppgB={statsBTotal.ppgButs}
         csA={statsATotal.csButs}
         csB={statsBTotal.csButs}
+        ftsA={statsATotal.ftsButs}
+        ftsB={statsBTotal.ftsButs}
         bttsA={statsATotal.bttsButs}
         bttsB={statsBTotal.bttsButs}
         attDangA={statsATotal.attDangSeries}
