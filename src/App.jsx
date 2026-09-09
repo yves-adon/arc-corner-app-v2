@@ -574,6 +574,7 @@ function OuBttsSection({ btts, totalLines, teamLines, teamAName, teamBName, favo
 function SignalNulMiTemps({
   ppgGlobalA, ppgGlobalB, ppgRecentA, ppgRecentB, ppgGapGlobal, ppgGapRecent, signal, teamAName, teamBName,
   ppgMT1A, ppgMT1B, ppgGapMT1, nulMT1PctA, nulMT1PctB, nulMT1NA, nulMT1NB, underMT1PctA, underMT1PctB, underMT1NA, underMT1NB,
+  h2hPpgMT1A, h2hPpgMT1B, h2hNulMT1Pct, h2hNulMT1N, h2hUnderMT1Pct, h2hUnderMT1N,
 }) {
   if (signal === null || signal === undefined) return null;
   const hasMT1Data = (ppgMT1A !== null && ppgMT1A !== undefined) || (ppgMT1B !== null && ppgMT1B !== undefined);
@@ -658,6 +659,30 @@ function SignalNulMiTemps({
               {underMT1PctA !== null && underMT1PctB !== null && " / "}
               {underMT1PctB !== null && <span style={{ color: C.teamB }}>{underMT1PctB.toFixed(0)}% ({underMT1NB})</span>}
             </span>
+          </div>
+        </div>
+      )}
+
+      {h2hNulMT1N !== null && h2hNulMT1N !== undefined && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, fontFamily: FONT_MONO, fontSize: 11.5, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
+          <div style={{ fontSize: 10, color: C.faint, fontFamily: FONT_BODY }}>
+            Contexte mi-temps H2H (confrontations directes) — affiché à titre indicatif, ne conditionne pas le badge :
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
+            <span style={{ color: C.faint }}>PPG mi-temps (H2H)</span>
+            <span>
+              <span style={{ color: C.teamA }}>{h2hPpgMT1A !== null && h2hPpgMT1A !== undefined ? h2hPpgMT1A.toFixed(2) : "—"}</span>
+              {" / "}
+              <span style={{ color: C.teamB }}>{h2hPpgMT1B !== null && h2hPpgMT1B !== undefined ? h2hPpgMT1B.toFixed(2) : "—"}</span>
+            </span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
+            <span style={{ color: C.faint }}>Taux de nul à la pause (H2H)</span>
+            <span>{h2hNulMT1Pct !== null ? `${h2hNulMT1Pct.toFixed(0)}% (${h2hNulMT1N})` : "—"}</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
+            <span style={{ color: C.faint }}>Under 1.5 buts à la MT (H2H)</span>
+            <span>{h2hUnderMT1Pct !== null ? `${h2hUnderMT1Pct.toFixed(0)}% (${h2hUnderMT1N})` : "—"}</span>
           </div>
         </div>
       )}
@@ -1968,142 +1993,6 @@ function PdfExtractTotalCorner({ teamName, color, onImport, onTeamNameDetected }
   );
 }
 
-/* ---------------------------------------------------------------
-   IMPORT DEPUIS GEMINI (ou tout texte au format "DD/MM/YYYY vs Adversaire : X - Y (A - B)")
-   ---------------------------------------------------------------
-   Format naturel que sort Gemini quand on lui demande l'historique d'une équipe — collé
-   TEL QUEL, souvent sans aucun retour à la ligne entre les matchs (une seule ligne de
-   texte), avec parfois le prochain match à venir sans score ("Match ce soir") et des
-   footnotes de sources en fin de texte ([1] (url), [2] (url)...). Le parseur ne dépend
-   d'AUCUN retour à la ligne : il retrouve chaque match par motif (date + "vs" + score),
-   peu importe le formatage, et ignore silencieusement tout ce qui ne matche pas (match à
-   venir sans score, footnotes).
-   Fusion avec les matchs DÉJÀ saisis (par ex. via TotalCorner, qui a les corners/tirs mais
-   pas la mi-temps) plutôt que doublon : les entrées sont dans le même ordre (plus récent
-   en haut) que le reste de l'app, donc fusion par POSITION — avec le score complet comme
-   garde-fou : si le score de la ligne collée ne correspond pas au match déjà en place à
-   cette position, la ligne est ignorée plutôt que d'écraser au mauvais endroit. Un match
-   collé au-delà de ce qui existe déjà crée une nouvelle ligne (date + score + mi-temps
-   seulement, le reste à compléter à la main si besoin). */
-function parseGeminiMatchHistory(text) {
-  const re = /(\d{2})\/(\d{2})\/(\d{4})\s+vs\s+(?:(?!\d{2}\/\d{2}\/\d{4}).)+?\s*:\s*(\d+)\s*-\s*(\d+)\s*(?:\((\d+)\s*-\s*(\d+)\))?/g;
-  const results = [];
-  let m;
-  while ((m = re.exec(text)) !== null) {
-    const [, dd, mm, , ftA, ftB, htA, htB] = m;
-    results.push({
-      date: `${mm}/${dd}`,
-      butsObtenus: ftA,
-      butsConcedes: ftB,
-      buts1MTObtenus: htA !== undefined ? htA : "",
-      buts1MTConcedes: htB !== undefined ? htB : "",
-    });
-  }
-  return results;
-}
-
-function mergeGeminiMatchHistory(matches, parsed) {
-  const merged = [...matches];
-  let filled = 0;
-  let created = 0;
-  let skipped = 0;
-  parsed.forEach((p, i) => {
-    if (i < merged.length) {
-      const existing = merged[i];
-      const ftMatches =
-        existing.butsObtenus !== "" && existing.butsObtenus !== undefined &&
-        num(existing.butsObtenus) === num(p.butsObtenus) && num(existing.butsConcedes) === num(p.butsConcedes);
-      const ftEmpty = existing.butsObtenus === "" || existing.butsObtenus === undefined;
-      if (ftMatches || ftEmpty) {
-        merged[i] = {
-          ...existing,
-          butsObtenus: existing.butsObtenus !== "" && existing.butsObtenus !== undefined ? existing.butsObtenus : p.butsObtenus,
-          butsConcedes: existing.butsConcedes !== "" && existing.butsConcedes !== undefined ? existing.butsConcedes : p.butsConcedes,
-          buts1MTObtenus: p.buts1MTObtenus,
-          buts1MTConcedes: p.buts1MTConcedes,
-          date: existing.date || p.date,
-        };
-        filled++;
-      } else {
-        skipped++;
-      }
-    } else {
-      merged.push({
-        id: uid(),
-        obtenus: "", concedes: "", lieu: "",
-        tirsObtenus: "", tirsConcedes: "",
-        attDangObtenus: "", attDangConcedes: "",
-        corners1MTObtenus: "", corners1MTConcedes: "", corners2MTObtenus: "", corners2MTConcedes: "",
-        butsObtenus: p.butsObtenus, butsConcedes: p.butsConcedes,
-        buts1MTObtenus: p.buts1MTObtenus, buts1MTConcedes: p.buts1MTConcedes,
-        xGObtenus: "", xGConcedes: "", ligue: "", date: p.date,
-      });
-      created++;
-    }
-  });
-  return { merged, filled, created, skipped };
-}
-
-function PasteGeminiMT1({ matches, setMatches }) {
-  const [open, setOpen] = useState(false);
-  const [text, setText] = useState("");
-  const [info, setInfo] = useState("");
-  const [error, setError] = useState("");
-
-  const run = () => {
-    const parsed = parseGeminiMatchHistory(text);
-    if (!parsed.length) {
-      setError('Aucun match reconnu — le texte doit contenir des lignes du type "30/08/2026 vs Valence CF : 2 - 1 (1 - 0)".');
-      return;
-    }
-    const { merged, filled, created, skipped } = mergeGeminiMatchHistory(matches, parsed);
-    setMatches(merged);
-    setInfo(
-      `${filled} match${filled > 1 ? "s" : ""} complété${filled > 1 ? "s" : ""} (buts 1ère mi-temps)${created ? ` · ${created} nouveau${created > 1 ? "x" : ""} match${created > 1 ? "s" : ""} créé${created > 1 ? "s" : ""}` : ""}${skipped ? ` · ${skipped} ligne(s) ignorée(s) (score final différent de ce qui était déjà saisi à cette position)` : ""}. Vérifie le résultat.`
-    );
-    setError("");
-    setText("");
-    setOpen(false);
-  };
-
-  if (!open) {
-    return (
-      <button
-        onClick={() => setOpen(true)}
-        style={{ fontSize: 10, color: C.faint, background: "transparent", border: `1px solid ${C.line}`, borderRadius: 6, padding: "2px 6px", cursor: "pointer", flexShrink: 0 }}
-      >
-        Coller depuis Gemini (buts 1MT)
-      </button>
-    );
-  }
-  return (
-    <div style={{ background: C.surface2, border: `1px solid ${C.line}`, borderRadius: 8, padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
-      <div style={{ fontSize: 10.5, color: C.dim, lineHeight: 1.4 }}>
-        Colle le texte tel quel — peu importe s'il n'y a aucun retour à la ligne. Reconnaît le format{" "}
-        <span style={{ fontFamily: FONT_MONO }}>DD/MM/YYYY vs Adversaire : X - Y (A - B)</span>. Complète la mi-temps
-        des matchs déjà saisis (recoupés par score complet), et ajoute les matchs manquants.
-      </div>
-      <textarea
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        rows={5}
-        placeholder="30/08/2026 vs Valence CF : 2 - 1 (1 - 0)23/08/2026 vs Real Betis : 3 - 0 (2 - 0)..."
-        style={{ width: "100%", background: C.bg, border: `1px solid ${C.line}`, borderRadius: 6, padding: 8, color: C.text, fontFamily: FONT_MONO, fontSize: 11, resize: "vertical" }}
-      />
-      {error && <div style={{ fontSize: 11, color: C.fragile }}>{error}</div>}
-      {info && <div style={{ fontSize: 11, color: C.jouable }}>{info}</div>}
-      <div style={{ display: "flex", gap: 6 }}>
-        <button onClick={run} style={{ background: C.solide + "22", border: `1px solid ${C.solide}55`, borderRadius: 6, padding: "6px 10px", color: C.solide, fontSize: 12, cursor: "pointer", fontWeight: 700 }}>
-          Importer
-        </button>
-        <button onClick={() => setOpen(false)} style={{ background: "transparent", border: `1px solid ${C.line}`, borderRadius: 6, padding: "6px 10px", color: C.dim, fontSize: 12, cursor: "pointer" }}>
-          Annuler
-        </button>
-      </div>
-    </div>
-  );
-}
-
 function MatchHistoryRows({ matches, setMatches, color, teamName, useAdvanced, onToggleAdvanced, excludedLigues, onToggleLigue, onTeamNameDetected, limitRecent, recentCount, onToggleRecent, onChangeRecentCount }) {
   const update = (id, next) => setMatches(matches.map((m) => (m.id === id ? next : m)));
   const remove = (id) => setMatches(matches.filter((m) => m.id !== id));
@@ -2122,7 +2011,7 @@ function MatchHistoryRows({ matches, setMatches, color, teamName, useAdvanced, o
         <div style={{ display: "flex", gap: 6 }}>
           <RawExtractTotalCorner teamName={teamName} color={color} onImport={(parsed) => setMatches([...parsed, ...matches])} onTeamNameDetected={onTeamNameDetected} />
           <PdfExtractTotalCorner teamName={teamName} color={color} onImport={(parsed) => setMatches([...parsed, ...matches])} onTeamNameDetected={onTeamNameDetected} />
-          <PasteGeminiMT1 matches={matches} setMatches={setMatches} />
+          <PasteForebetTeamHistory matches={matches} setMatches={setMatches} teamName={teamName} />
           {matches.length > 1 && (
             <button
               onClick={() => setMatches([...matches].reverse())}
@@ -3519,7 +3408,9 @@ function parsePhotoH2hRows(rowTexts, teamAName, teamBName) {
   if (!aWords.length || !bWords.length) return { results, skipped: rowTexts };
 
   for (const raw of rowTexts) {
-    // retire la mi-temps entre parenthèses pour ne pas la confondre avec le score
+    // isole la mi-temps AVANT de la retirer (pour la garder), puis retire pour ne pas la
+    // confondre avec le score final
+    const halfMatch = raw.match(/\((\d+)\s*-\s*(\d+)\)/);
     const withoutHalf = raw.replace(/\([^)]*\)/g, " ");
     const scoreMatch = withoutHalf.match(/(\d+)\s*-\s*(\d+)/);
     if (!scoreMatch || scoreMatch.index === undefined) continue; // pas une ligne de match (titre, légende...)
@@ -3534,9 +3425,14 @@ function parsePhotoH2hRows(rowTexts, teamAName, teamBName) {
     const aRight = aWords.some((w) => after.includes(w));
     const bRight = bWords.some((w) => after.includes(w));
 
-    let butsA = null, butsB = null;
-    if (aLeft && bRight) { butsA = leftGoals; butsB = rightGoals; }
-    else if (bLeft && aRight) { butsA = rightGoals; butsB = leftGoals; }
+    let butsA = null, butsB = null, buts1MTA = "", buts1MTB = "";
+    if (aLeft && bRight) {
+      butsA = leftGoals; butsB = rightGoals;
+      if (halfMatch) { buts1MTA = halfMatch[1]; buts1MTB = halfMatch[2]; }
+    } else if (bLeft && aRight) {
+      butsA = rightGoals; butsB = leftGoals;
+      if (halfMatch) { buts1MTA = halfMatch[2]; buts1MTB = halfMatch[1]; }
+    }
 
     if (butsA === null) { skipped.push(raw); continue; }
 
@@ -3552,6 +3448,8 @@ function parsePhotoH2hRows(rowTexts, teamAName, teamBName) {
       home: null,
       butsA,
       butsB,
+      buts1MTA,
+      buts1MTB,
       date: dateStr,
     });
   }
@@ -3563,7 +3461,11 @@ function parsePhotoH2hRows(rowTexts, teamAName, teamBName) {
 // fiables. Regroupe les lignes en blocs "un match = tout ce qui suit une ligne DD/MM
 // jusqu'à la prochaine" (Forebet, SofaScore et sites similaires affichent la date sur 2
 // lignes séparées du reste), puis réutilise exactement la même extraction score/équipes.
-function parseH2hPastedTable(text, teamAName, teamBName) {
+// Regroupe un texte collé (format Forebet : date sur 2 lignes suivie du reste) en blocs
+// "un match = tout ce qui suit une ligne DD/MM jusqu'à la prochaine" — factorisé ici car
+// utilisé à la fois par le H2H (parseH2hPastedTable) et l'historique d'équipe seule
+// (parseForebetTeamHistory) ci-dessous.
+function blocksFromPastedTable(text) {
   const lines = (text || "").split("\n").map((l) => l.trim()).filter(Boolean);
   const blocks = [];
   let current = null;
@@ -3576,8 +3478,199 @@ function parseH2hPastedTable(text, teamAName, teamBName) {
     }
   }
   if (current) blocks.push(current);
-  const rowTexts = blocks.map((b) => b.join(" "));
-  return parsePhotoH2hRows(rowTexts, teamAName, teamBName);
+  return blocks.map((b) => b.join(" "));
+}
+
+function parseH2hPastedTable(text, teamAName, teamBName) {
+  return parsePhotoH2hRows(blocksFromPastedTable(text), teamAName, teamBName);
+}
+
+/* ---------------------------------------------------------------
+   IMPORT FOREBET — HISTORIQUE D'UNE SEULE ÉQUIPE (avec mi-temps)
+   ---------------------------------------------------------------
+   Même format collé que le tableau H2H (date sur 2 lignes, score + mi-temps entre
+   parenthèses, code compétition) mais Forebet le propose aussi pour l'historique PROPRE
+   d'une équipe, séparé en 2 listes distinctes : "home matches" et "away matches". Comme le
+   format ne dit pas explicitement qui reçoit (contrairement au H2H où on n'a besoin que du
+   score), le domicile/extérieur est donné une fois pour toute la liste collée (l'utilisateur
+   dit quelle liste il colle), pas déduit ligne à ligne.
+   Fusion par DATE (pas par position comme pour un import positionnel classique) : Forebet "away matches" est un
+   SOUS-ENSEMBLE de l'historique complet (les matchs à domicile sont ailleurs), donc la
+   position ne correspond pas à la position dans la liste complète déjà saisie via
+   TotalCorner. La date (jour/mois, l'année n'est pas stockée dans l'appli) sert de clé,
+   avec le score complet comme garde-fou avant de compléter la mi-temps — jamais d'écrasement
+   d'un champ déjà rempli. */
+function parseForebetTeamHistory(text, teamName) {
+  const rowTexts = blocksFromPastedTable(text);
+  const teamWords = teamKeywords(teamName);
+  const results = [];
+  const skipped = [];
+  if (!teamWords.length) return { results, skipped: rowTexts };
+
+  for (const raw of rowTexts) {
+    const halfMatch = raw.match(/\((\d+)\s*-\s*(\d+)\)/);
+    const withoutHalf = raw.replace(/\([^)]*\)/g, " ");
+    const scoreMatch = withoutHalf.match(/(\d+)\s*-\s*(\d+)/);
+    if (!scoreMatch || scoreMatch.index === undefined) {
+      skipped.push(raw);
+      continue;
+    }
+    const before = withoutHalf.slice(0, scoreMatch.index).toLowerCase();
+    const after = withoutHalf.slice(scoreMatch.index + scoreMatch[0].length).toLowerCase();
+    const leftGoals = scoreMatch[1];
+    const rightGoals = scoreMatch[2];
+
+    const teamLeft = teamWords.some((w) => before.includes(w));
+    const teamRight = teamWords.some((w) => after.includes(w));
+
+    let butsObtenus = null, butsConcedes = null, buts1MTObtenus = "", buts1MTConcedes = "";
+    if (teamLeft && !teamRight) {
+      butsObtenus = leftGoals;
+      butsConcedes = rightGoals;
+      if (halfMatch) { buts1MTObtenus = halfMatch[1]; buts1MTConcedes = halfMatch[2]; }
+    } else if (teamRight && !teamLeft) {
+      butsObtenus = rightGoals;
+      butsConcedes = leftGoals;
+      if (halfMatch) { buts1MTObtenus = halfMatch[2]; buts1MTConcedes = halfMatch[1]; }
+    } else {
+      skipped.push(raw);
+      continue;
+    }
+
+    const dmMatch = raw.match(/\b(\d{2})[.\/](\d{2})\b/);
+    if (!dmMatch) {
+      skipped.push(raw);
+      continue;
+    }
+    results.push({
+      // Forebet donne DD/MM (dmMatch[1]=jour, dmMatch[2]=mois) ; l'appli stocke MM/DD
+      // (comme TotalCorner) — inversé ici pour matcher exactement ce format déjà en place.
+      date: `${dmMatch[2]}/${dmMatch[1]}`,
+      butsObtenus,
+      butsConcedes,
+      buts1MTObtenus,
+      buts1MTConcedes,
+    });
+  }
+  return { results, skipped };
+}
+
+function mergeForebetByDate(matches, parsed, lieu) {
+  const merged = [...matches];
+  let filled = 0;
+  let created = 0;
+  let skipped = 0;
+  const fillIfEmpty = (existingVal, newVal) => (existingVal !== "" && existingVal !== undefined && existingVal !== null ? existingVal : newVal);
+
+  parsed.forEach((p) => {
+    // p.date est déjà au format MM/DD (converti dans parseForebetTeamHistory) — comparaison
+    // directe avec le champ "date" existant, qui utilise le même format (voir TotalCorner)
+    const idx = merged.findIndex((m) => m.date === p.date);
+    if (idx === -1) {
+      merged.push({
+        id: uid(),
+        obtenus: "", concedes: "", lieu,
+        tirsObtenus: "", tirsConcedes: "",
+        attDangObtenus: "", attDangConcedes: "",
+        corners1MTObtenus: "", corners1MTConcedes: "", corners2MTObtenus: "", corners2MTConcedes: "",
+        butsObtenus: p.butsObtenus, butsConcedes: p.butsConcedes,
+        buts1MTObtenus: p.buts1MTObtenus, buts1MTConcedes: p.buts1MTConcedes,
+        xGObtenus: "", xGConcedes: "", ligue: "", date: p.date,
+      });
+      created++;
+      return;
+    }
+    const existing = merged[idx];
+    const ftMatches = existing.butsObtenus !== "" && existing.butsObtenus !== undefined && num(existing.butsObtenus) === num(p.butsObtenus) && num(existing.butsConcedes) === num(p.butsConcedes);
+    const ftEmpty = existing.butsObtenus === "" || existing.butsObtenus === undefined;
+    if (!ftMatches && !ftEmpty) {
+      skipped++;
+      return;
+    }
+    merged[idx] = {
+      ...existing,
+      lieu: fillIfEmpty(existing.lieu, lieu),
+      butsObtenus: fillIfEmpty(existing.butsObtenus, p.butsObtenus),
+      butsConcedes: fillIfEmpty(existing.butsConcedes, p.butsConcedes),
+      buts1MTObtenus: fillIfEmpty(existing.buts1MTObtenus, p.buts1MTObtenus),
+      buts1MTConcedes: fillIfEmpty(existing.buts1MTConcedes, p.buts1MTConcedes),
+    };
+    filled++;
+  });
+  return { merged, filled, created, skipped };
+}
+
+function PasteForebetTeamHistory({ matches, setMatches, teamName }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [lieu, setLieu] = useState("E");
+  const [info, setInfo] = useState("");
+  const [error, setError] = useState("");
+
+  const run = () => {
+    if (!teamName || !teamName.trim()) {
+      setError("Renseigne d'abord le nom de l'équipe ci-dessus.");
+      return;
+    }
+    const { results, skipped: notMatched } = parseForebetTeamHistory(text, teamName);
+    if (!results.length) {
+      setError(`Aucun match reconnu pour "${teamName}" dans ce texte.`);
+      return;
+    }
+    const { merged, filled, created, skipped } = mergeForebetByDate(matches, results, lieu);
+    setMatches(merged);
+    setInfo(
+      `${filled} match${filled > 1 ? "s" : ""} complété${filled > 1 ? "s" : ""} (mi-temps)${created ? ` · ${created} nouveau${created > 1 ? "x" : ""} match${created > 1 ? "s" : ""} créé${created > 1 ? "s" : ""}` : ""}${skipped ? ` · ${skipped} ignoré(s) (score différent à cette date)` : ""}${notMatched.length ? ` · ${notMatched.length} ligne(s) non reconnue(s)` : ""}. Vérifie le résultat.`
+    );
+    setError("");
+    setText("");
+    setOpen(false);
+  };
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        style={{ fontSize: 10, color: C.faint, background: "transparent", border: `1px solid ${C.line}`, borderRadius: 6, padding: "2px 6px", cursor: "pointer", flexShrink: 0 }}
+      >
+        Coller depuis Forebet (mi-temps)
+      </button>
+    );
+  }
+  return (
+    <div style={{ background: C.surface2, border: `1px solid ${C.line}`, borderRadius: 8, padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ fontSize: 10.5, color: C.dim, lineHeight: 1.4 }}>
+        Colle une liste Forebet "home matches" OU "away matches" de <b style={{ color: C.text }}>{teamName || "l'équipe"}</b> — une
+        seule à la fois (Forebet ne dit pas qui reçoit, donc précise-le ci-dessous). Recoupé par date + score avec
+        les matchs déjà saisis (jamais d'écrasement) ; ajoute les matchs manquants.
+      </div>
+      <div style={{ display: "flex", gap: 6 }}>
+        <button onClick={() => setLieu("D")} style={{ fontSize: 11, padding: "4px 8px", borderRadius: 6, border: `1px solid ${lieu === "D" ? C.teamA : C.line}`, background: lieu === "D" ? C.teamA + "22" : "transparent", color: lieu === "D" ? C.teamA : C.dim, cursor: "pointer" }}>
+          Liste "home" (domicile)
+        </button>
+        <button onClick={() => setLieu("E")} style={{ fontSize: 11, padding: "4px 8px", borderRadius: 6, border: `1px solid ${lieu === "E" ? C.teamB : C.line}`, background: lieu === "E" ? C.teamB + "22" : "transparent", color: lieu === "E" ? C.teamB : C.dim, cursor: "pointer" }}>
+          Liste "away" (extérieur)
+        </button>
+      </div>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        rows={5}
+        placeholder={`away matches\n02/09\n2026\n Londrina0 - 0\n(0 - 0)\n ${teamName || "Ton équipe"} Br2\n...`}
+        style={{ width: "100%", background: C.bg, border: `1px solid ${C.line}`, borderRadius: 6, padding: 8, color: C.text, fontFamily: FONT_MONO, fontSize: 11, resize: "vertical" }}
+      />
+      {error && <div style={{ fontSize: 11, color: C.fragile }}>{error}</div>}
+      {info && <div style={{ fontSize: 11, color: C.jouable }}>{info}</div>}
+      <div style={{ display: "flex", gap: 6 }}>
+        <button onClick={run} style={{ background: C.solide + "22", border: `1px solid ${C.solide}55`, borderRadius: 6, padding: "6px 10px", color: C.solide, fontSize: 12, cursor: "pointer", fontWeight: 700 }}>
+          Importer
+        </button>
+        <button onClick={() => setOpen(false)} style={{ background: "transparent", border: `1px solid ${C.line}`, borderRadius: 6, padding: "6px 10px", color: C.dim, fontSize: 12, cursor: "pointer" }}>
+          Annuler
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function PhotoExtractH2h({ teamAName, teamBName, onImport }) {
@@ -4351,15 +4444,13 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
       : null;
 
   // Signal "Nul Mi-temps" (règle PPG) — RÈGLE EXTERNE fournie par l'utilisateur, pas un
-  // calcul dérivé des données de l'app comme le reste : aucun champ "buts 1ère mi-temps"
-  // n'existe dans le formulaire de saisie (seuls les corners sont suivis par mi-temps),
-  // donc impossible de calculer une vraie fréquence empirique de nul à la mi-temps sur
-  // l'historique — ce signal reste un simple booléen (validé / non validé), pas une
-  // probabilité, et n'est PAS injecté dans la probabilité normalisée ci-dessus (rien à y
-  // mélanger sans données de mi-temps réelles). Si un jour tu veux une vraie probabilité
-  // ici, il faudrait ajouter un champ "buts 1MT obt./conc." à la saisie des matchs, comme
-  // ça existe déjà pour les corners.
-  // Règle : écart PPG saison (10 matchs) <= 0.40 ET écart PPG récent (ici 5 matchs) >= 1.00.
+  // calcul dérivé des données de l'app comme le reste. Le badge lui-même (validé/non
+  // validé) reste un booléen fixe, pas une probabilité — mais depuis l'ajout des champs
+  // "buts 1MT" (import Forebet), du VRAI contexte mi-temps est maintenant affiché à
+  // côté (PPG mi-temps, taux de nul à la pause, Under 1.5 à la MT), pour le profil de
+  // chaque équipe ET pour les confrontations directes H2H.
+  // Règle du badge : écart PPG saison (10 matchs) <= 0.40 ET écart PPG récent (ici 5
+  // matchs) >= 1.00.
   const ppgGlobalA = statsATotal.ppgButs;
   const ppgGlobalB = statsBTotal.ppgButs;
   const ppgRecentA = ppgRecent(filterMatches(teamA).matches, "butsObtenus", "butsConcedes", 5);
@@ -4367,6 +4458,15 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
   const ppgGapGlobal = ppgGlobalA !== null && ppgGlobalB !== null ? Math.abs(ppgGlobalA - ppgGlobalB) : null;
   const ppgGapRecent = ppgRecentA !== null && ppgRecentB !== null ? Math.abs(ppgRecentA - ppgRecentB) : null;
   const signalNulMT1 = ppgGapGlobal !== null && ppgGapRecent !== null ? ppgGapGlobal <= 0.4 && ppgGapRecent >= 1.0 : null;
+
+  // Contexte mi-temps H2H (confrontations directes) — mêmes fonctions déjà là pour le
+  // reste de l'app (computeVND, ppgFromVnd, computeOverUnder), pointées sur les champs
+  // buts1MTA/buts1MTB des confrontations directes plutôt que buts1MTObtenus/Concedes.
+  const h2hVndMT1A = computeVND(h2hEffective, "buts1MTA", "buts1MTB");
+  const h2hVndMT1B = computeVND(h2hEffective, "buts1MTB", "buts1MTA");
+  const h2hPpgMT1A = ppgFromVnd(h2hVndMT1A);
+  const h2hPpgMT1B = ppgFromVnd(h2hVndMT1B);
+  const h2hOuMT1_15 = computeOverUnder(h2hEffective, "buts1MTA", "buts1MTB", 1.5);
 
   const ouTotalLines = OU_TOTAL_LINES.map((line) => {
     const h2hRate = h2hEmpiricalOverRate(h2hEffective, "total", line);
@@ -4571,6 +4671,23 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
         signal={signalNulMT1}
         teamAName={teamA.nom}
         teamBName={teamB.nom}
+        ppgMT1A={statsATotal.ppgMT1Buts}
+        ppgMT1B={statsBTotal.ppgMT1Buts}
+        ppgGapMT1={statsATotal.ppgMT1Buts !== null && statsATotal.ppgMT1Buts !== undefined && statsBTotal.ppgMT1Buts !== null && statsBTotal.ppgMT1Buts !== undefined ? Math.abs(statsATotal.ppgMT1Buts - statsBTotal.ppgMT1Buts) : null}
+        nulMT1PctA={statsATotal.vndMT1Buts ? (statsATotal.vndMT1Buts.nul / statsATotal.vndMT1Buts.n) * 100 : null}
+        nulMT1PctB={statsBTotal.vndMT1Buts ? (statsBTotal.vndMT1Buts.nul / statsBTotal.vndMT1Buts.n) * 100 : null}
+        nulMT1NA={statsATotal.vndMT1Buts ? statsATotal.vndMT1Buts.n : null}
+        nulMT1NB={statsBTotal.vndMT1Buts ? statsBTotal.vndMT1Buts.n : null}
+        underMT1PctA={statsATotal.ouMT1_15 ? 100 - statsATotal.ouMT1_15.pctOver : null}
+        underMT1PctB={statsBTotal.ouMT1_15 ? 100 - statsBTotal.ouMT1_15.pctOver : null}
+        underMT1NA={statsATotal.ouMT1_15 ? statsATotal.ouMT1_15.n : null}
+        underMT1NB={statsBTotal.ouMT1_15 ? statsBTotal.ouMT1_15.n : null}
+        h2hPpgMT1A={h2hPpgMT1A}
+        h2hPpgMT1B={h2hPpgMT1B}
+        h2hNulMT1Pct={h2hVndMT1A ? (h2hVndMT1A.nul / h2hVndMT1A.n) * 100 : null}
+        h2hNulMT1N={h2hVndMT1A ? h2hVndMT1A.n : null}
+        h2hUnderMT1Pct={h2hOuMT1_15 ? 100 - h2hOuMT1_15.pctOver : null}
+        h2hUnderMT1N={h2hOuMT1_15 ? h2hOuMT1_15.n : null}
       />
 
       <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", gap: 10 }}>
