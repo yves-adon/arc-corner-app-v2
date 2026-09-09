@@ -301,21 +301,23 @@ function poissonBttsProb(lambdaA, lambdaB) {
   return (1 - pA0) * (1 - pB0);
 }
 // fréquence réelle sur les H2H (comptage brut, comme l'axe H2H de la proba de victoire) —
-// field: "total" (buts du match), "butsA" ou "butsB" (buts d'une équipe seule)
-function h2hEmpiricalOverRate(h2h, field, line) {
-  const valid = (h2h || []).filter((m) => m.butsA !== "" && m.butsA !== undefined && m.butsA !== null && m.butsB !== "" && m.butsB !== undefined && m.butsB !== null);
+// field: "total" (buts du match), "A" ou "B" (buts d'une équipe seule). keyA/keyB
+// paramétrables (défaut buts temps plein) pour réutiliser telle quelle sur la mi-temps
+// (buts1MTA/buts1MTB) sans dupliquer la fonction.
+function h2hEmpiricalOverRate(h2h, field, line, keyA = "butsA", keyB = "butsB") {
+  const valid = (h2h || []).filter((m) => m[keyA] !== "" && m[keyA] !== undefined && m[keyA] !== null && m[keyB] !== "" && m[keyB] !== undefined && m[keyB] !== null);
   if (valid.length < 3) return null;
   const overCount = valid.filter((m) => {
-    const a = num(m.butsA), b = num(m.butsB);
-    const val = field === "total" ? a + b : field === "butsA" ? a : b;
+    const a = num(m[keyA]), b = num(m[keyB]);
+    const val = field === "total" ? a + b : field === "A" ? a : b;
     return val > line;
   }).length;
   return { n: valid.length, rate: overCount / valid.length };
 }
-function h2hEmpiricalBtts(h2h) {
-  const valid = (h2h || []).filter((m) => m.butsA !== "" && m.butsA !== undefined && m.butsA !== null && m.butsB !== "" && m.butsB !== undefined && m.butsB !== null);
+function h2hEmpiricalBtts(h2h, keyA = "butsA", keyB = "butsB") {
+  const valid = (h2h || []).filter((m) => m[keyA] !== "" && m[keyA] !== undefined && m[keyA] !== null && m[keyB] !== "" && m[keyB] !== undefined && m[keyB] !== null);
   if (valid.length < 3) return null;
-  const yes = valid.filter((m) => num(m.butsA) > 0 && num(m.butsB) > 0).length;
+  const yes = valid.filter((m) => num(m[keyA]) > 0 && num(m[keyB]) > 0).length;
   return { n: valid.length, rate: yes / valid.length };
 }
 // moyenne pondérée générique de plusieurs estimations indépendantes d'UNE probabilité
@@ -555,6 +557,144 @@ function OuBttsSection({ btts, totalLines, teamLines, teamAName, teamBName, favo
         disponible — pas de "Forme (RC)" ici, un écart de forme signé ne se traduit pas directement en probabilité
         de buts. Une équipe peut ressortir favorite au résultat tout en ayant un BTTS élevé : les deux infos sont
         indépendantes, d'où ce visuel séparé plutôt que noyé dans la probabilité de victoire.
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------
+   SECTION MI-TEMPS — Vic/Nul/Déf, BTTS/Over-Under normalisés, indicateurs de verrouillage
+   ---------------------------------------------------------------
+   Même traitement que le temps plein (EWMA, projections Poisson dom./ext. + tous lieux,
+   H2H, combinaison pondérée) mais appliqué aux buts à la pause plutôt qu'au score final —
+   réutilise le moteur déjà construit (combineWinProbs, combineProb, poissonBttsProb,
+   poissonOverProb), pas de nouvelle logique de fond. */
+function Mt1TeamHistoryRow({ label, vnd, ppg, teamAName, teamBName }) {
+  if (!vnd) return null;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      <div style={{ fontSize: 10.5, color: C.faint, display: "flex", justifyContent: "space-between" }}>
+        <span>{label}</span>
+        <span style={{ fontFamily: FONT_MONO }}>
+          PPG {ppg !== null && ppg !== undefined ? ppg.toFixed(2) : "—"} · {vnd.n} matchs
+        </span>
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", fontFamily: FONT_MONO, fontSize: 11 }}>
+        <span style={{ color: C.solide }}>Vic {((vnd.vic / vnd.n) * 100).toFixed(0)}%</span>
+        <span style={{ color: C.faint }}>Nul {((vnd.nul / vnd.n) * 100).toFixed(0)}%</span>
+        <span style={{ color: C.fragile }}>Déf {((vnd.def / vnd.n) * 100).toFixed(0)}%</span>
+      </div>
+    </div>
+  );
+}
+
+function Mt1Section({
+  combined, teamAName, teamBName,
+  vndMT1A, ppgMT1A, vndMT1B, ppgMT1B,
+  bttsMT1, totalLinesMT1, teamLinesMT1,
+  mt1GoalsRatioVenue, mt1GoalsRatioGlobal, attDangCombinedVenue, attDangCombinedGlobal,
+}) {
+  if (!combined && !bttsMT1 && !(totalLinesMT1 || []).some((l) => l.data)) return null;
+  const ratioOk = (r) => r !== null && r !== undefined && r < 0.4;
+  const adOk = (v) => v !== null && v !== undefined && v < 80;
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+      <SectionTitle sub="H2H + buts (Poisson) mi-temps, dom./ext. ET tous lieux · expérimental">
+        Mi-temps — Vic/Nul/Déf, BTTS &amp; Over/Under
+      </SectionTitle>
+
+      {combined && (
+        <div style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 8, padding: 10 }}>
+          <div style={{ fontSize: 9.5, color: C.faint, marginBottom: 4 }}>Résultat à la pause (ce match)</div>
+          <ThreeWayBar
+            pctVic={combined.pA * 100}
+            pctNul={combined.pDraw * 100}
+            pctDef={combined.pB * 100}
+            labelVic={teamAName || "Équipe A"}
+            labelDef={teamBName || "Équipe B"}
+            colorVic={C.teamA}
+            colorDef={C.teamB}
+          />
+        </div>
+      )}
+
+      {(vndMT1A || vndMT1B) && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
+          <div style={{ fontSize: 10, color: C.faint, textTransform: "uppercase", letterSpacing: 0.5 }}>Historique propre à la mi-temps (tous lieux confondus)</div>
+          <Mt1TeamHistoryRow label={teamAName || "Équipe A"} vnd={vndMT1A} ppg={ppgMT1A} teamAName={teamAName} teamBName={teamBName} />
+          <Mt1TeamHistoryRow label={teamBName || "Équipe B"} vnd={vndMT1B} ppg={ppgMT1B} teamAName={teamAName} teamBName={teamBName} />
+        </div>
+      )}
+
+      {bttsMT1 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 3, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
+          <div style={{ fontSize: 10.5, color: C.faint }}>BTTS à la mi-temps (les deux marquent avant la pause)</div>
+          <OuProbBar p={bttsMT1} />
+        </div>
+      )}
+
+      {(totalLinesMT1 || []).some((l) => l.data) && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ fontSize: 10, color: C.faint, textTransform: "uppercase", letterSpacing: 0.5 }}>Buts à la mi-temps (total)</div>
+          {totalLinesMT1.map(({ line, data }) => (
+            <div key={line} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+              <div style={{ fontSize: 10.5, color: C.faint }}>Plus de {line} but{line >= 1 ? "s" : ""} à la pause</div>
+              <OuProbBar p={data} />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {(teamLinesMT1 || []).some((l) => l.pA || l.pB) && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
+          <div style={{ fontSize: 10, color: C.faint, textTransform: "uppercase", letterSpacing: 0.5 }}>Buts par équipe à la mi-temps</div>
+          {teamLinesMT1.map(({ line, pA, pB }) => (
+            <OuTeamLineRow key={line} line={line} pA={pA} pB={pB} teamAName={teamAName} teamBName={teamBName} />
+          ))}
+        </div>
+      )}
+
+      {(mt1GoalsRatioVenue !== null || mt1GoalsRatioGlobal !== null || attDangCombinedVenue !== null || attDangCombinedGlobal !== null) && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 5, borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
+          <div style={{ fontSize: 10, color: C.faint, textTransform: "uppercase", letterSpacing: 0.5 }}>
+            Indicateurs de verrouillage (suggérés, informatifs — ne conditionnent aucun badge)
+          </div>
+          {(mt1GoalsRatioVenue !== null || mt1GoalsRatioGlobal !== null) && (
+            <div style={{ fontSize: 11, fontFamily: FONT_MONO, display: "flex", justifyContent: "space-between" }}>
+              <span style={{ color: C.faint }}>Part des buts déjà marqués à la pause (seuil &lt; 40%)</span>
+              <span>
+                {mt1GoalsRatioVenue !== null && (
+                  <span style={{ color: ratioOk(mt1GoalsRatioVenue) ? C.solide : C.text }}>dom/ext {(mt1GoalsRatioVenue * 100).toFixed(0)}%</span>
+                )}
+                {mt1GoalsRatioVenue !== null && mt1GoalsRatioGlobal !== null && " · "}
+                {mt1GoalsRatioGlobal !== null && (
+                  <span style={{ color: ratioOk(mt1GoalsRatioGlobal) ? C.solide : C.text }}>global {(mt1GoalsRatioGlobal * 100).toFixed(0)}%</span>
+                )}
+              </span>
+            </div>
+          )}
+          {(attDangCombinedVenue !== null || attDangCombinedGlobal !== null) && (
+            <div style={{ fontSize: 11, fontFamily: FONT_MONO, display: "flex", justifyContent: "space-between" }}>
+              <span style={{ color: C.faint }}>Attaques dangereuses combinées projetées (seuil &lt; 80)</span>
+              <span>
+                {attDangCombinedVenue !== null && (
+                  <span style={{ color: adOk(attDangCombinedVenue) ? C.solide : C.text }}>dom/ext {attDangCombinedVenue.toFixed(0)}</span>
+                )}
+                {attDangCombinedVenue !== null && attDangCombinedGlobal !== null && " · "}
+                {attDangCombinedGlobal !== null && (
+                  <span style={{ color: adOk(attDangCombinedGlobal) ? C.solide : C.text }}>global {attDangCombinedGlobal.toFixed(0)}</span>
+                )}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic" }}>
+        Même moteur que le temps plein (Poisson, H2H, moyenne pondérée renormalisée), pointé sur les buts à la
+        pause — pas d'axe Menace/Forme (pas d'attaques dangereuses ou de forme spécifiques à la mi-temps). Les 2
+        indicateurs de verrouillage sont affichés à titre informatif — pas encore assez de recul pour en faire des
+        conditions bloquantes comme le badge du Signal Nul Mi-temps ci-dessus.
       </div>
     </div>
   );
@@ -1273,20 +1413,19 @@ function computeHistoryStats(matches, alpha = 0.25, includeAdvanced = true) {
   // même logique EWMA/volatilité/projection que les corners
   const butsSeries = computeStatSeries(matches, "butsObtenus", "butsConcedes", alpha);
   const vndButs = computeVND(matches, "butsObtenus", "butsConcedes");
+  // buts à la MI-TEMPS — même traitement complet que le temps plein (EWMA, volatilité,
+  // part) pour pouvoir projeter/normaliser la mi-temps avec la même rigueur que le reste
+  // (Poisson, BTTS, Over/Under...), pas juste des % bruts.
+  const buts1MTSeries = computeStatSeries(matches, "buts1MTObtenus", "buts1MTConcedes", alpha);
+  const vndMT1Buts = computeVND(matches, "buts1MTObtenus", "buts1MTConcedes");
+  const ppgMT1Buts = ppgFromVnd(vndMT1Buts);
+  const ouMT1_15 = computeOverUnder(matches, "buts1MTObtenus", "buts1MTConcedes", 1.5);
   // taux Over/Under buts réel sur ligne fixe 2.5 — voir commentaire sur computeOverUnder
   const ouButs25 = computeOverUnder(matches, "butsObtenus", "butsConcedes", 2.5);
   const csButs = computeCleanSheet(matches, "butsConcedes");
   const ftsButs = computeFailToScore(matches, "butsObtenus");
   const bttsButs = computeBTTS(matches, "butsObtenus", "butsConcedes");
   const ppgButs = ppgFromVnd(vndButs);
-  // Mi-temps (buts) — pour le Signal Nul Mi-temps : PPG mi-temps (résultat à la pause
-  // traité comme un mini-match, 3/1/0 pts), taux de nul à la pause (inclus dans vndMT1Buts
-  // via .nul/.n), et taux Under 1.5 à la pause. Réutilise TELLES QUELLES les fonctions déjà
-  // là pour le reste de l'app (computeVND, ppgFromVnd, computeOverUnder) — aucune nouvelle
-  // fonction nécessaire, juste les pointer sur les champs buts1MT.
-  const vndMT1Buts = computeVND(matches, "buts1MTObtenus", "buts1MTConcedes");
-  const ppgMT1Buts = ppgFromVnd(vndMT1Buts);
-  const ouMT1_15 = computeOverUnder(matches, "buts1MTObtenus", "buts1MTConcedes", 1.5);
   // xG (expected goals) — entièrement optionnel, saisi à la main match par match (champ
   // "tirs/att. dangereuses/xG" avancé) ; computeStatSeries filtre déjà automatiquement
   // aux matchs où les deux valeurs sont renseignées, donc null tant qu'aucun xG n'a été
@@ -1307,6 +1446,7 @@ function computeHistoryStats(matches, alpha = 0.25, includeAdvanced = true) {
     vndMT1,
     vndMT2,
     butsSeries,
+    buts1MTSeries,
     vndButs,
     ouButs25,
     csButs,
@@ -1365,6 +1505,7 @@ function pickVenueStats(team, venue, minN = 3) {
       vndMT1: venueStats.vndMT1,
       vndMT2: venueStats.vndMT2,
       butsSeries: venueStats.butsSeries,
+      buts1MTSeries: venueStats.buts1MTSeries,
       vndButs: venueStats.vndButs,
       ouButs25: venueStats.ouButs25,
       csButs: venueStats.csButs,
@@ -1395,6 +1536,7 @@ function pickVenueStats(team, venue, minN = 3) {
       vndMT1: overall.vndMT1,
       vndMT2: overall.vndMT2,
       butsSeries: overall.butsSeries,
+      buts1MTSeries: overall.buts1MTSeries,
       vndButs: overall.vndButs,
       ouButs25: overall.ouButs25,
       csButs: overall.csButs,
@@ -1407,7 +1549,7 @@ function pickVenueStats(team, venue, minN = 3) {
       xGSeries: overall.xGSeries,
     };
   }
-  return { nom: team.nom, obtenus: num(team.obtenus), concedes: num(team.concedes), part: team.part, ewma: team.ewma, volatilite: null, source: "manuel", n: 0, tirsSeries: null, attDangSeries: null, mt1Series: null, mt2Series: null, vndTotal: null, vndMT1: null, vndMT2: null, butsSeries: null, vndButs: null, ouButs25: null, csButs: null, ftsButs: null, vndMT1Buts: null, ppgMT1Buts: null, ouMT1_15: null, bttsButs: null, ppgButs: null, xGSeries: null };
+  return { nom: team.nom, obtenus: num(team.obtenus), concedes: num(team.concedes), part: team.part, ewma: team.ewma, volatilite: null, source: "manuel", n: 0, tirsSeries: null, attDangSeries: null, mt1Series: null, mt2Series: null, vndTotal: null, vndMT1: null, vndMT2: null, butsSeries: null, buts1MTSeries: null, vndButs: null, ouButs25: null, csButs: null, ftsButs: null, vndMT1Buts: null, ppgMT1Buts: null, ouMT1_15: null, bttsButs: null, ppgButs: null, xGSeries: null };
 }
 
 /* Variante pour les confrontations directes : on connaît les 2 équipes précises,
@@ -3489,17 +3631,18 @@ function parseH2hPastedTable(text, teamAName, teamBName) {
    IMPORT FOREBET — HISTORIQUE D'UNE SEULE ÉQUIPE (avec mi-temps)
    ---------------------------------------------------------------
    Même format collé que le tableau H2H (date sur 2 lignes, score + mi-temps entre
-   parenthèses, code compétition) mais Forebet le propose aussi pour l'historique PROPRE
-   d'une équipe, séparé en 2 listes distinctes : "home matches" et "away matches". Comme le
-   format ne dit pas explicitement qui reçoit (contrairement au H2H où on n'a besoin que du
-   score), le domicile/extérieur est donné une fois pour toute la liste collée (l'utilisateur
-   dit quelle liste il colle), pas déduit ligne à ligne.
-   Fusion par DATE (pas par position comme pour un import positionnel classique) : Forebet "away matches" est un
-   SOUS-ENSEMBLE de l'historique complet (les matchs à domicile sont ailleurs), donc la
-   position ne correspond pas à la position dans la liste complète déjà saisie via
-   TotalCorner. La date (jour/mois, l'année n'est pas stockée dans l'appli) sert de clé,
-   avec le score complet comme garde-fou avant de compléter la mi-temps — jamais d'écrasement
-   d'un champ déjà rempli. */
+   parenthèses, code compétition). Forebet liste ces matchs soit en 2 listes séparées
+   ("home matches" / "away matches"), soit en une seule liste combinée ("Last N matches") —
+   dans les deux cas, le domicile/extérieur se lit directement dans la DISPOSITION de la
+   ligne : l'équipe listée en PREMIER (à gauche du score) est celle qui recevait, l'autre
+   jouait à l'extérieur. Déduit donc ligne à ligne, pas besoin de demander à l'utilisateur
+   quelle liste il colle — un seul copier-coller suffit, mélangé ou pas.
+   Fusion par DATE (pas par position) : ni "away matches" seul (sous-ensemble) ni même une
+   liste combinée ne correspondent forcément à la position dans l'historique complet déjà
+   saisi via TotalCorner (compétitions différentes, matchs manquants côté free tier...). La
+   date (jour/mois, l'année n'est pas stockée dans l'appli) sert de clé, avec le score
+   complet comme garde-fou avant de compléter la mi-temps — jamais d'écrasement d'un champ
+   déjà rempli. */
 function parseForebetTeamHistory(text, teamName) {
   const rowTexts = blocksFromPastedTable(text);
   const teamWords = teamKeywords(teamName);
@@ -3523,14 +3666,18 @@ function parseForebetTeamHistory(text, teamName) {
     const teamLeft = teamWords.some((w) => before.includes(w));
     const teamRight = teamWords.some((w) => after.includes(w));
 
-    let butsObtenus = null, butsConcedes = null, buts1MTObtenus = "", buts1MTConcedes = "";
+    let butsObtenus = null, butsConcedes = null, buts1MTObtenus = "", buts1MTConcedes = "", lieu = "";
     if (teamLeft && !teamRight) {
+      // équipe listée en premier (à gauche) = elle recevait
       butsObtenus = leftGoals;
       butsConcedes = rightGoals;
+      lieu = "D";
       if (halfMatch) { buts1MTObtenus = halfMatch[1]; buts1MTConcedes = halfMatch[2]; }
     } else if (teamRight && !teamLeft) {
+      // équipe listée en second (à droite) = elle jouait à l'extérieur
       butsObtenus = rightGoals;
       butsConcedes = leftGoals;
+      lieu = "E";
       if (halfMatch) { buts1MTObtenus = halfMatch[2]; buts1MTConcedes = halfMatch[1]; }
     } else {
       skipped.push(raw);
@@ -3546,6 +3693,7 @@ function parseForebetTeamHistory(text, teamName) {
       // Forebet donne DD/MM (dmMatch[1]=jour, dmMatch[2]=mois) ; l'appli stocke MM/DD
       // (comme TotalCorner) — inversé ici pour matcher exactement ce format déjà en place.
       date: `${dmMatch[2]}/${dmMatch[1]}`,
+      lieu,
       butsObtenus,
       butsConcedes,
       buts1MTObtenus,
@@ -3555,7 +3703,7 @@ function parseForebetTeamHistory(text, teamName) {
   return { results, skipped };
 }
 
-function mergeForebetByDate(matches, parsed, lieu) {
+function mergeForebetByDate(matches, parsed) {
   const merged = [...matches];
   let filled = 0;
   let created = 0;
@@ -3569,7 +3717,7 @@ function mergeForebetByDate(matches, parsed, lieu) {
     if (idx === -1) {
       merged.push({
         id: uid(),
-        obtenus: "", concedes: "", lieu,
+        obtenus: "", concedes: "", lieu: p.lieu,
         tirsObtenus: "", tirsConcedes: "",
         attDangObtenus: "", attDangConcedes: "",
         corners1MTObtenus: "", corners1MTConcedes: "", corners2MTObtenus: "", corners2MTConcedes: "",
@@ -3589,7 +3737,7 @@ function mergeForebetByDate(matches, parsed, lieu) {
     }
     merged[idx] = {
       ...existing,
-      lieu: fillIfEmpty(existing.lieu, lieu),
+      lieu: fillIfEmpty(existing.lieu, p.lieu),
       butsObtenus: fillIfEmpty(existing.butsObtenus, p.butsObtenus),
       butsConcedes: fillIfEmpty(existing.butsConcedes, p.butsConcedes),
       buts1MTObtenus: fillIfEmpty(existing.buts1MTObtenus, p.buts1MTObtenus),
@@ -3603,7 +3751,6 @@ function mergeForebetByDate(matches, parsed, lieu) {
 function PasteForebetTeamHistory({ matches, setMatches, teamName }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
-  const [lieu, setLieu] = useState("E");
   const [info, setInfo] = useState("");
   const [error, setError] = useState("");
 
@@ -3617,10 +3764,12 @@ function PasteForebetTeamHistory({ matches, setMatches, teamName }) {
       setError(`Aucun match reconnu pour "${teamName}" dans ce texte.`);
       return;
     }
-    const { merged, filled, created, skipped } = mergeForebetByDate(matches, results, lieu);
+    const { merged, filled, created, skipped } = mergeForebetByDate(matches, results);
     setMatches(merged);
+    const nbD = results.filter((r) => r.lieu === "D").length;
+    const nbE = results.filter((r) => r.lieu === "E").length;
     setInfo(
-      `${filled} match${filled > 1 ? "s" : ""} complété${filled > 1 ? "s" : ""} (mi-temps)${created ? ` · ${created} nouveau${created > 1 ? "x" : ""} match${created > 1 ? "s" : ""} créé${created > 1 ? "s" : ""}` : ""}${skipped ? ` · ${skipped} ignoré(s) (score différent à cette date)` : ""}${notMatched.length ? ` · ${notMatched.length} ligne(s) non reconnue(s)` : ""}. Vérifie le résultat.`
+      `${filled} match${filled > 1 ? "s" : ""} complété${filled > 1 ? "s" : ""} (mi-temps)${created ? ` · ${created} nouveau${created > 1 ? "x" : ""} match${created > 1 ? "s" : ""} créé${created > 1 ? "s" : ""}` : ""} — ${nbD} domicile / ${nbE} extérieur détectés${skipped ? ` · ${skipped} ignoré(s) (score différent à cette date)` : ""}${notMatched.length ? ` · ${notMatched.length} ligne(s) non reconnue(s)` : ""}. Vérifie le résultat.`
     );
     setError("");
     setText("");
@@ -3640,17 +3789,10 @@ function PasteForebetTeamHistory({ matches, setMatches, teamName }) {
   return (
     <div style={{ background: C.surface2, border: `1px solid ${C.line}`, borderRadius: 8, padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
       <div style={{ fontSize: 10.5, color: C.dim, lineHeight: 1.4 }}>
-        Colle une liste Forebet "home matches" OU "away matches" de <b style={{ color: C.text }}>{teamName || "l'équipe"}</b> — une
-        seule à la fois (Forebet ne dit pas qui reçoit, donc précise-le ci-dessous). Recoupé par date + score avec
-        les matchs déjà saisis (jamais d'écrasement) ; ajoute les matchs manquants.
-      </div>
-      <div style={{ display: "flex", gap: 6 }}>
-        <button onClick={() => setLieu("D")} style={{ fontSize: 11, padding: "4px 8px", borderRadius: 6, border: `1px solid ${lieu === "D" ? C.teamA : C.line}`, background: lieu === "D" ? C.teamA + "22" : "transparent", color: lieu === "D" ? C.teamA : C.dim, cursor: "pointer" }}>
-          Liste "home" (domicile)
-        </button>
-        <button onClick={() => setLieu("E")} style={{ fontSize: 11, padding: "4px 8px", borderRadius: 6, border: `1px solid ${lieu === "E" ? C.teamB : C.line}`, background: lieu === "E" ? C.teamB + "22" : "transparent", color: lieu === "E" ? C.teamB : C.dim, cursor: "pointer" }}>
-          Liste "away" (extérieur)
-        </button>
+        Colle l'historique Forebet de <b style={{ color: C.text }}>{teamName || "l'équipe"}</b> tel quel — "home
+        matches", "away matches" ou une liste combinée ("Last N matches"), peu importe. Domicile/extérieur est
+        détecté automatiquement (l'équipe listée en premier sur chaque ligne recevait). Recoupé par date + score
+        avec les matchs déjà saisis (jamais d'écrasement) ; ajoute les matchs manquants.
       </div>
       <textarea
         value={text}
@@ -4243,6 +4385,14 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
   const attDangProjGlobalEwma = statsATotal.attDangSeries && statsBTotal.attDangSeries
     ? projection(statsATotal.attDangSeries.ewmaObtenus, statsBTotal.attDangSeries.ewmaConcedes, statsBTotal.attDangSeries.ewmaObtenus, statsATotal.attDangSeries.ewmaConcedes)
     : null;
+  // Même chose pour les buts à la MI-TEMPS — sert au nouveau bloc "Mi-temps" (Vic/Nul/Déf,
+  // BTTS/Over-Under normalisés) plus bas, avec la même rigueur EWMA que le reste.
+  const buts1MTProjVenueEwma = effA.buts1MTSeries && effB.buts1MTSeries
+    ? projection(effA.buts1MTSeries.ewmaObtenus, effB.buts1MTSeries.ewmaConcedes, effB.buts1MTSeries.ewmaObtenus, effA.buts1MTSeries.ewmaConcedes)
+    : null;
+  const buts1MTProjGlobalEwma = statsATotal.buts1MTSeries && statsBTotal.buts1MTSeries
+    ? projection(statsATotal.buts1MTSeries.ewmaObtenus, statsBTotal.buts1MTSeries.ewmaConcedes, statsBTotal.buts1MTSeries.ewmaObtenus, statsATotal.buts1MTSeries.ewmaConcedes)
+    : null;
 
   // Version BRUTE (moyenne, pas EWMA) des mêmes projections att. dangereuses — UNIQUEMENT
   // pour décider qui domine dans les patterns favori dominé/dominant ci-dessous. Nécessaire
@@ -4468,6 +4618,71 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
   const h2hPpgMT1B = ppgFromVnd(h2hVndMT1B);
   const h2hOuMT1_15 = computeOverUnder(h2hEffective, "buts1MTA", "buts1MTB", 1.5);
 
+  // Vic/Nul/Déf À LA MI-TEMPS pour CE match — même moteur que la probabilité de victoire
+  // temps plein (combineWinProbs, réutilisée telle quelle : H2H + Poisson dom./ext. +
+  // Poisson global, sans axe Menace/Forme puisqu'il n'existe pas d'attaques dangereuses ou
+  // de forme spécifiques à la mi-temps — la fonction renormalise déjà automatiquement sur
+  // les axes présents, donc rien à changer côté combineWinProbs).
+  const h2hMT1Triple = h2hVndMT1A && h2hVndMT1A.n >= 3
+    ? { pA: h2hVndMT1A.vic / h2hVndMT1A.n, pDraw: h2hVndMT1A.nul / h2hVndMT1A.n, pB: h2hVndMT1A.def / h2hVndMT1A.n }
+    : null;
+  const mt1PoissonVenue = buts1MTProjVenueEwma ? computePoissonMatch(buts1MTProjVenueEwma.projA, buts1MTProjVenueEwma.projB) : null;
+  const mt1PoissonGlobal = buts1MTProjGlobalEwma ? computePoissonMatch(buts1MTProjGlobalEwma.projA, buts1MTProjGlobalEwma.projB) : null;
+  const mt1Combined = combineWinProbs({ h2h: h2hMT1Triple, poissonVenue: mt1PoissonVenue, poissonGlobal: mt1PoissonGlobal });
+
+  // BTTS & Over/Under À LA MI-TEMPS — même moteur que le temps plein (combineProb +
+  // poissonBttsProb/poissonOverProb), pointé sur les lambdas mi-temps. Lignes plus basses
+  // qu'en temps plein (0.5/1.5 au lieu de 1.5/2.5/3.5) — une mi-temps se termine rarement
+  // à plus de 2 buts.
+  const MT1_TOTAL_LINES = [0.5, 1.5];
+  const MT1_TEAM_LINES = [0.5];
+  const h2hBttsMT1Rate = h2hEmpiricalBtts(h2hEffective, "buts1MTA", "buts1MTB");
+  const bttsMT1Sources = [
+    { key: "h2h", p: h2hBttsMT1Rate ? h2hBttsMT1Rate.rate : null, weight: OU_BTTS_WEIGHTS.h2h },
+    { key: "butsVenue", p: buts1MTProjVenueEwma ? poissonBttsProb(buts1MTProjVenueEwma.projA, buts1MTProjVenueEwma.projB) : null, weight: OU_BTTS_WEIGHTS.butsVenue },
+    { key: "butsGlobal", p: buts1MTProjGlobalEwma ? poissonBttsProb(buts1MTProjGlobalEwma.projA, buts1MTProjGlobalEwma.projB) : null, weight: OU_BTTS_WEIGHTS.butsGlobal },
+  ];
+  const bttsMT1 = combineProb(bttsMT1Sources);
+
+  const ouTotalLinesMT1 = MT1_TOTAL_LINES.map((line) => {
+    const h2hRate = h2hEmpiricalOverRate(h2hEffective, "total", line, "buts1MTA", "buts1MTB");
+    const data = combineProb([
+      { key: "h2h", p: h2hRate ? h2hRate.rate : null, weight: OU_BTTS_WEIGHTS.h2h },
+      { key: "butsVenue", p: buts1MTProjVenueEwma ? poissonOverProb(buts1MTProjVenueEwma.total, line) : null, weight: OU_BTTS_WEIGHTS.butsVenue },
+      { key: "butsGlobal", p: buts1MTProjGlobalEwma ? poissonOverProb(buts1MTProjGlobalEwma.total, line) : null, weight: OU_BTTS_WEIGHTS.butsGlobal },
+    ]);
+    return { line, data };
+  });
+
+  const ouTeamLinesMT1 = MT1_TEAM_LINES.map((line) => {
+    const h2hRateA = h2hEmpiricalOverRate(h2hEffective, "A", line, "buts1MTA", "buts1MTB");
+    const h2hRateB = h2hEmpiricalOverRate(h2hEffective, "B", line, "buts1MTA", "buts1MTB");
+    const pA = combineProb([
+      { key: "h2h", p: h2hRateA ? h2hRateA.rate : null, weight: OU_BTTS_WEIGHTS.h2h },
+      { key: "butsVenue", p: buts1MTProjVenueEwma ? poissonOverProb(buts1MTProjVenueEwma.projA, line) : null, weight: OU_BTTS_WEIGHTS.butsVenue },
+      { key: "butsGlobal", p: buts1MTProjGlobalEwma ? poissonOverProb(buts1MTProjGlobalEwma.projA, line) : null, weight: OU_BTTS_WEIGHTS.butsGlobal },
+    ]);
+    const pB = combineProb([
+      { key: "h2h", p: h2hRateB ? h2hRateB.rate : null, weight: OU_BTTS_WEIGHTS.h2h },
+      { key: "butsVenue", p: buts1MTProjVenueEwma ? poissonOverProb(buts1MTProjVenueEwma.projB, line) : null, weight: OU_BTTS_WEIGHTS.butsVenue },
+      { key: "butsGlobal", p: buts1MTProjGlobalEwma ? poissonOverProb(buts1MTProjGlobalEwma.projB, line) : null, weight: OU_BTTS_WEIGHTS.butsGlobal },
+    ]);
+    return { line, pA, pB };
+  });
+
+  // Suggestions #4 : les 2 critères proposés par l'utilisateur, affichés en CONTEXTE (pas
+  // bloquants, comme discuté) — taux de buts déjà marqués à la pause (combiné, doit être
+  // BAS pour un match verrouillé) et volume d'attaques dangereuses combiné (déjà dispo via
+  // TotalCorner, pas de mi-temps spécifique nécessaire).
+  const mt1GoalsRatioVenue = buts1MTProjVenueEwma && butsProjVenueEwma && butsProjVenueEwma.total > 0
+    ? buts1MTProjVenueEwma.total / butsProjVenueEwma.total
+    : null;
+  const mt1GoalsRatioGlobal = buts1MTProjGlobalEwma && butsProjGlobalEwma && butsProjGlobalEwma.total > 0
+    ? buts1MTProjGlobalEwma.total / butsProjGlobalEwma.total
+    : null;
+  const attDangCombinedVenue = attDangProjVenueEwma ? attDangProjVenueEwma.total : null;
+  const attDangCombinedGlobal = attDangProjGlobalEwma ? attDangProjGlobalEwma.total : null;
+
   const ouTotalLines = OU_TOTAL_LINES.map((line) => {
     const h2hRate = h2hEmpiricalOverRate(h2hEffective, "total", line);
     const data = combineProb([
@@ -4481,8 +4696,8 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
   });
 
   const ouTeamLines = OU_TEAM_LINES.map((line) => {
-    const h2hRateA = h2hEmpiricalOverRate(h2hEffective, "butsA", line);
-    const h2hRateB = h2hEmpiricalOverRate(h2hEffective, "butsB", line);
+    const h2hRateA = h2hEmpiricalOverRate(h2hEffective, "A", line);
+    const h2hRateB = h2hEmpiricalOverRate(h2hEffective, "B", line);
     const pA = combineProb([
       { key: "h2h", p: h2hRateA ? h2hRateA.rate : null, weight: OU_BTTS_WEIGHTS.h2h },
       { key: "butsVenue", p: butsProjVenueEwma ? poissonOverProb(butsProjVenueEwma.projA, line) : null, weight: OU_BTTS_WEIGHTS.butsVenue },
@@ -4659,6 +4874,23 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
         teamBName={teamB.nom}
         favoriIsDominatedAttDangBoth={favoriIsDominatedAttDangBoth}
         favoriMenaceButsGap={favoriMenaceButsGap}
+      />
+
+      <Mt1Section
+        combined={mt1Combined}
+        teamAName={teamA.nom}
+        teamBName={teamB.nom}
+        vndMT1A={statsATotal.vndMT1Buts}
+        ppgMT1A={statsATotal.ppgMT1Buts}
+        vndMT1B={statsBTotal.vndMT1Buts}
+        ppgMT1B={statsBTotal.ppgMT1Buts}
+        bttsMT1={bttsMT1}
+        totalLinesMT1={ouTotalLinesMT1}
+        teamLinesMT1={ouTeamLinesMT1}
+        mt1GoalsRatioVenue={mt1GoalsRatioVenue}
+        mt1GoalsRatioGlobal={mt1GoalsRatioGlobal}
+        attDangCombinedVenue={attDangCombinedVenue}
+        attDangCombinedGlobal={attDangCombinedGlobal}
       />
 
       <SignalNulMiTemps
