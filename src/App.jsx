@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   Plus, Trash2, Check, X, Minus, RotateCcw, Target,
-  ClipboardList, BarChart3, Flag, Loader2, ArrowRightLeft, Camera
+  ClipboardList, BarChart3, Flag, Loader2, ArrowRightLeft, Camera,
+  ChevronDown, ChevronUp, Gauge
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
@@ -1181,6 +1182,43 @@ function EmptyState({ title, text }) {
   );
 }
 
+/* Bloc pliable/dépliable générique — utilisé pour compresser les visuels de stats qui
+   s'allongent au fur et à mesure que des données optionnelles sont saisies (tirs, att.
+   dangereuses, mi-temps, buts...), afin d'éviter d'avoir à scroller énormément.
+   Replié par défaut (defaultOpen=false) pour garder la page compacte ; un badge (ex :
+   nombre de matchs) reste visible même replié pour savoir ce qu'il y a dedans. */
+function Collapsible({ title, badge, color = C.dim, defaultOpen = false, children }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 8, overflow: "hidden" }}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          width: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          background: open ? color + "14" : "transparent",
+          border: "none",
+          padding: "8px 10px",
+          cursor: "pointer",
+          textAlign: "left",
+        }}
+      >
+        <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, fontWeight: 700, color: open ? color : C.text, fontFamily: FONT_BODY }}>
+          {title}
+          {badge !== undefined && badge !== null && (
+            <span style={{ fontSize: 10, fontWeight: 700, color: C.faint, fontFamily: FONT_MONO }}>{badge}</span>
+          )}
+        </span>
+        {open ? <ChevronUp size={14} color={C.faint} style={{ flexShrink: 0 }} /> : <ChevronDown size={14} color={C.faint} style={{ flexShrink: 0 }} />}
+      </button>
+      {open && <div style={{ padding: 10, borderTop: `1px solid ${C.line}`, fontFamily: FONT_MONO, fontSize: 11.5, color: C.dim, display: "flex", flexDirection: "column", gap: 3 }}>{children}</div>}
+    </div>
+  );
+}
+
 /* ---------------------------------------------------------------
    TEAM PROFILE CARD — obtenus/concédés, part des corners, EWMA diff
 --------------------------------------------------------------- */
@@ -1458,6 +1496,45 @@ function computeHistoryStats(matches, alpha = 0.25, includeAdvanced = true) {
     ppgButs,
     xGSeries,
   };
+}
+
+/* Stats "buts" (Forebet) — même logique que computeHistoryStats mais SANS exiger de
+   corners (contrairement à computeHistoryStats qui renvoie null si "obtenus"/"concedes"
+   corners sont absents). Sert au panneau pliable "Forebet" qui doit fonctionner même
+   pour des matchs saisis uniquement via Forebet (pas de corners du tout). */
+function computeButsStats(matches, alpha = 0.25) {
+  const butsSeries = computeStatSeries(matches, "butsObtenus", "butsConcedes", alpha);
+  if (!butsSeries) return null;
+  const vndButs = computeVND(matches, "butsObtenus", "butsConcedes");
+  const buts1MTSeries = computeStatSeries(matches, "buts1MTObtenus", "buts1MTConcedes", alpha);
+  const vndMT1Buts = computeVND(matches, "buts1MTObtenus", "buts1MTConcedes");
+  const ouButs25 = computeOverUnder(matches, "butsObtenus", "butsConcedes", 2.5);
+  const ouMT1_15 = computeOverUnder(matches, "buts1MTObtenus", "buts1MTConcedes", 1.5);
+  const csButs = computeCleanSheet(matches, "butsConcedes");
+  const ftsButs = computeFailToScore(matches, "butsObtenus");
+  const bttsButs = computeBTTS(matches, "butsObtenus", "butsConcedes");
+  const ppgButs = ppgFromVnd(vndButs);
+  const ppgMT1Buts = ppgFromVnd(vndMT1Buts);
+  return { n: butsSeries.n, butsSeries, vndButs, buts1MTSeries, vndMT1Buts, ouButs25, ouMT1_15, csButs, ftsButs, bttsButs, ppgButs, ppgMT1Buts };
+}
+
+/* Stats "combiné" — matchs recoupés PAR DATE entre le PDF TotalCorner (corners / att.
+   dangereuses) et Forebet (buts) : uniquement les matchs qui ont ÀLA FOIS des buts
+   (Forebet) ET soit des att. dangereuses soit des corners (TotalCorner) sur la même
+   ligne — donc bien une même rencontre couverte par les deux sources. Le panneau
+   n'affiche volontairement QUE buts, buts 1MT et att. dangereuses (pas les corners). */
+function computeCombinedSourceStats(matches, alpha = 0.25) {
+  const combined = matches.filter(
+    (m) =>
+      m.butsObtenus !== "" && m.butsObtenus !== undefined &&
+      m.butsConcedes !== "" && m.butsConcedes !== undefined &&
+      ((m.attDangObtenus !== "" && m.attDangObtenus !== undefined) || (m.obtenus !== "" && m.obtenus !== undefined))
+  );
+  if (!combined.length) return null;
+  const buts = computeButsStats(combined, alpha);
+  const attDangSeries = computeStatSeries(combined, "attDangObtenus", "attDangConcedes", alpha);
+  const vndAttDang = computeVND(combined, "attDangObtenus", "attDangConcedes");
+  return { n: combined.length, buts, attDangSeries, vndAttDang };
 }
 
 const emptyTeam = () => ({ nom: "", obtenus: "", concedes: "", part: "", ewma: "", mode: "moyennes", matches: [], useAdvanced: false, excludedLigues: [], limitRecent: false, recentCount: 10 });
@@ -2340,6 +2417,87 @@ function VolBadge({ vol, volSource }) {
   );
 }
 
+/* Bloc "buts" réutilisable — affiche buts (match complet) + buts 1MT (mi-temps) + Vic/Nul/Déf
+   + Over/Under + Clean sheet/Fail to score/BTTS, à partir d'un objet computeButsStats().
+   Utilisé à la fois par le panneau "Forebet" (toutes les données buts saisies) et le
+   panneau "Combiné" (uniquement les matchs recoupés par date avec TotalCorner). */
+function ButsStatsBlock({ b, teamName }) {
+  if (!b) return null;
+  return (
+    <>
+      <div>
+        buts — match complet : <b style={{ color: C.text }}>{b.butsSeries.moyObtenus.toFixed(2)}</b>/
+        <b style={{ color: C.text }}>{b.butsSeries.moyConcedes.toFixed(2)}</b> · part{" "}
+        {b.butsSeries.part.toFixed(0)}% · EWMA {b.butsSeries.ewma >= 0 ? "+" : ""}
+        {b.butsSeries.ewma.toFixed(2)} · vol ±{b.butsSeries.volatilite.toFixed(2)}{" "}
+        <VolBadge vol={b.butsSeries.volatilite} volSource="historique" />
+      </div>
+      {(() => {
+        const form = b.butsSeries.n >= 3 ? computeFormLabel(b.butsSeries) : null;
+        if (!form) return null;
+        return (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginTop: 2 }}>
+            <Pill color={form.color}>{form.label}</Pill>
+            <span style={{ color: C.faint, fontSize: 10 }}>ratio {form.ratio.toFixed(2)}× (EWMA / volatilité)</span>
+          </div>
+        );
+      })()}
+      {b.buts1MTSeries && (
+        <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 4, paddingTop: 5 }}>
+          <div style={{ fontSize: 10, color: C.faint, marginBottom: 2 }}>buts à la mi-temps (1MT) · tous lieux confondus</div>
+          <div>
+            <b style={{ color: C.text }}>{b.buts1MTSeries.moyObtenus.toFixed(2)}</b>/
+            <b style={{ color: C.text }}>{b.buts1MTSeries.moyConcedes.toFixed(2)}</b> · part{" "}
+            {b.buts1MTSeries.part.toFixed(0)}% · EWMA {b.buts1MTSeries.ewma >= 0 ? "+" : ""}
+            {b.buts1MTSeries.ewma.toFixed(2)} · vol ±{b.buts1MTSeries.volatilite.toFixed(2)}{" "}
+            <VolBadge vol={b.buts1MTSeries.volatilite} volSource="historique" />
+          </div>
+        </div>
+      )}
+      {(b.csButs || b.ftsButs || b.bttsButs) && (
+        <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 4, paddingTop: 5, display: "flex", flexDirection: "column", gap: 1 }}>
+          {b.csButs && <span>Clean sheet : <b style={{ color: C.text }}>{b.csButs.pct.toFixed(0)}%</b> ({b.csButs.cs}/{b.csButs.n})</span>}
+          {b.ftsButs && <span>Fail to score : <b style={{ color: C.text }}>{b.ftsButs.pct.toFixed(0)}%</b> ({b.ftsButs.fts}/{b.ftsButs.n})</span>}
+          {b.bttsButs && <span>BTTS : <b style={{ color: C.text }}>{b.bttsButs.pct.toFixed(0)}%</b> ({b.bttsButs.btts}/{b.bttsButs.n})</span>}
+        </div>
+      )}
+      {(b.ouButs25 || b.ouMT1_15) && (
+        <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 4, paddingTop: 5, display: "flex", flexDirection: "column", gap: 4 }}>
+          <OuBar ou={b.ouButs25} label="Over/Under 2.5 buts (T.P.)" />
+          <OuBar ou={b.ouMT1_15} label="Over/Under 1.5 buts (1MT)" />
+        </div>
+      )}
+      {(b.vndButs || b.vndMT1Buts) && (
+        <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 4, paddingTop: 5 }}>
+          <div style={{ fontSize: 10, color: C.faint, marginBottom: 3 }}>duel des buts — Vic/Nul/Déf</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr repeat(4, auto)", gap: "2px 8px", fontSize: 11 }}>
+            <span style={{ color: C.faint }}></span>
+            <span style={{ color: C.faint }}>Vic</span>
+            <span style={{ color: C.faint }}>Nul</span>
+            <span style={{ color: C.faint }}>Déf</span>
+            <span style={{ color: C.faint }}>%vict.</span>
+            {[
+              { label: "Total", v: b.vndButs },
+              { label: "1ère MT", v: b.vndMT1Buts },
+            ].map(
+              ({ label, v }) =>
+                v && (
+                  <React.Fragment key={label}>
+                    <span>{label} ({v.n})</span>
+                    <span style={{ color: C.solide }}>{v.vic}</span>
+                    <span style={{ color: C.faint }}>{v.nul}</span>
+                    <span style={{ color: C.fragile }}>{v.def}</span>
+                    <span style={{ color: C.text, fontWeight: 700 }}>{v.pctVic.toFixed(0)}%</span>
+                  </React.Fragment>
+                )
+            )}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 function TeamProfileForm({ team, setTeam, color, label }) {
   const setMatches = (matches) => setTeam((prev) => ({ ...prev, matches }));
   // filtre compétition : appliqué UNIQUEMENT au calcul, la liste des matchs reste
@@ -2349,6 +2507,12 @@ function TeamProfileForm({ team, setTeam, color, label }) {
   const toggleLigue = (name) =>
     setTeam({ ...team, excludedLigues: excludedLigues.includes(name) ? excludedLigues.filter((l) => l !== name) : [...excludedLigues, name] });
   const stats = computeHistoryStats(filteredMatches, 0.25, !!team.useAdvanced);
+  // trois visuels pliables/dépliables séparés par source de données : TotalCorner
+  // (corners), Forebet (buts, indépendant des corners) et Combiné (matchs recoupés PAR
+  // DATE entre les deux sources — buts + buts 1MT + att. dangereuses uniquement, pas de
+  // corners) — voir computeButsStats / computeCombinedSourceStats.
+  const butsStats = computeButsStats(filteredMatches, 0.25);
+  const combinedStats = computeCombinedSourceStats(filteredMatches, 0.25);
   const useHistory = team.mode === "historique";
 
   return (
@@ -2414,203 +2578,220 @@ function TeamProfileForm({ team, setTeam, color, label }) {
             onToggleRecent={() => setTeam({ ...team, limitRecent: !team.limitRecent })}
             onChangeRecentCount={(v) => setTeam({ ...team, recentCount: v })}
           />
-          {stats ? (
-            <div style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 8, padding: 10, fontFamily: FONT_MONO, fontSize: 11.5, color: C.dim, display: "flex", flexDirection: "column", gap: 3 }}>
-              <div>
-                Calculé sur <b style={{ color: C.text }}>{stats.n}</b> match{stats.n > 1 ? "s" : ""}{" "}
-                <span style={{ color: C.faint }}>
-                  (tous lieux confondus
-                  {excludedLigues.length ? ` · ${excludedLigues.length} compétition${excludedLigues.length > 1 ? "s" : ""} exclue${excludedLigues.length > 1 ? "s" : ""}` : ""}
-                  {team.limitRecent ? ` · limité aux ${team.recentCount ?? 10} plus récents` : ""})
-                </span>
-              </div>
-              <div>moyenne obtenus <b style={{ color: C.text }}>{stats.moyObtenus.toFixed(2)}</b> · concédés <b style={{ color: C.text }}>{stats.moyConcedes.toFixed(2)}</b></div>
-              <div>part des corners <b style={{ color: C.text }}>{stats.part.toFixed(0)}%</b> · EWMA <b style={{ color: C.text }}>{stats.ewma >= 0 ? "+" : ""}{stats.ewma.toFixed(2)}</b></div>
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                volatilité totale (écart-type) <b style={{ color: C.text }}>±{stats.volatilite.toFixed(2)}</b>
-                <Pill color={volatiliteLabel(stats.volatilite).color}>{volatiliteLabel(stats.volatilite).label}</Pill>
-              </div>
-              {(() => {
-                const s5 = computeHistoryStats(team.matches.slice(0, 5));
-                const s10 = computeHistoryStats(team.matches.slice(0, 10));
-                if (!s5 || team.matches.length < 5) return null;
-                const diff = (s) => (s.moyObtenus - s.moyConcedes >= 0 ? "+" : "") + (s.moyObtenus - s.moyConcedes).toFixed(2);
-                const mtDiff = (s, key) => {
-                  const series = s && s[key];
-                  if (!series) return null;
-                  const d = series.moyObtenus - series.moyConcedes;
-                  return (d >= 0 ? "+" : "") + d.toFixed(2);
-                };
-                const rows = [
-                  { label: "Total", d5: diff(s5), d10: s10 && team.matches.length >= 10 ? diff(s10) : null },
-                  { label: "1ère MT", d5: mtDiff(s5, "mt1Series"), d10: team.matches.length >= 10 ? mtDiff(s10, "mt1Series") : null },
-                  { label: "2ème MT", d5: mtDiff(s5, "mt2Series"), d10: team.matches.length >= 10 ? mtDiff(s10, "mt2Series") : null },
-                ];
-                return (
-                  <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 2, paddingTop: 5 }}>
-                    <div style={{ fontSize: 10, color: C.faint, marginBottom: 2 }}>forme récente (diff. corners obtenus − concédés)</div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                      {rows.map(
-                        (r) =>
-                          r.d5 !== null && (
-                            <div key={r.label} style={{ display: "flex", gap: 12 }}>
-                              <span style={{ color: C.faint, minWidth: 52, display: "inline-block" }}>{r.label}</span>
-                              <span>5 derniers : <b style={{ color: C.text }}>{r.d5}</b></span>
-                              {r.d10 !== null && (
-                                <span>10 derniers : <b style={{ color: C.text }}>{r.d10}</b></span>
-                              )}
-                            </div>
-                          )
-                      )}
-                    </div>
+          {(stats || butsStats || combinedStats) ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {stats && (
+                <Collapsible title="📊 TotalCorners" badge={`${stats.n} match${stats.n > 1 ? "s" : ""}`} color={color}>
+                  <div>
+                    Calculé sur <b style={{ color: C.text }}>{stats.n}</b> match{stats.n > 1 ? "s" : ""}{" "}
+                    <span style={{ color: C.faint }}>
+                      (tous lieux confondus
+                      {excludedLigues.length ? ` · ${excludedLigues.length} compétition${excludedLigues.length > 1 ? "s" : ""} exclue${excludedLigues.length > 1 ? "s" : ""}` : ""}
+                      {team.limitRecent ? ` · limité aux ${team.recentCount ?? 10} plus récents` : ""})
+                    </span>
                   </div>
-                );
-              })()}
-              {stats.tirs && (
-                <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 2, paddingTop: 5 }}>
-                  <div style={{ fontSize: 10, color: C.faint, marginBottom: 2 }}>
-                    conversion tirs → corners (optionnel, sur {stats.tirs.n} match{stats.tirs.n > 1 ? "s" : ""})
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-                    {stats.tirs.ratioTotal !== null && (
-                      <span>Total : <b style={{ color: C.text }}>{stats.tirs.ratioTotal.toFixed(2)}</b> corner/tir</span>
-                    )}
-                    {stats.tirs.ratioObtenu !== null && (
-                      <span>Obtenu : <b style={{ color: C.text }}>{stats.tirs.ratioObtenu.toFixed(2)}</b> corner/tir ({stats.tirs.moyTirsObtenus.toFixed(1)} tirs/match)</span>
-                    )}
-                    {stats.tirs.ratioConcede !== null && (
-                      <span>Concédé : <b style={{ color: C.text }}>{stats.tirs.ratioConcede.toFixed(2)}</b> corner/tir ({stats.tirs.moyTirsConcedes.toFixed(1)} tirs/match)</span>
-                    )}
-                  </div>
-                </div>
-              )}
-              {stats.attDang && (
-                <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 2, paddingTop: 5 }}>
-                  <div style={{ fontSize: 10, color: C.faint, marginBottom: 2 }}>
-                    conversion att. dangereuses → corners (optionnel, sur {stats.attDang.n} match{stats.attDang.n > 1 ? "s" : ""})
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-                    {stats.attDang.ratioTotal !== null && (
-                      <span>Total : <b style={{ color: C.text }}>{stats.attDang.ratioTotal.toFixed(2)}</b> corner/att.</span>
-                    )}
-                    {stats.attDang.ratioObtenu !== null && (
-                      <span>Obtenu : <b style={{ color: C.text }}>{stats.attDang.ratioObtenu.toFixed(2)}</b> corner/att. ({stats.attDang.moyAttObtenus.toFixed(1)} att./match)</span>
-                    )}
-                    {stats.attDang.ratioConcede !== null && (
-                      <span>Concédé : <b style={{ color: C.text }}>{stats.attDang.ratioConcede.toFixed(2)}</b> corner/att. ({stats.attDang.moyAttConcedes.toFixed(1)} att./match)</span>
-                    )}
-                  </div>
-                </div>
-              )}
-              {(stats.mt1Series || stats.mt2Series) && (
-                <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 2, paddingTop: 5 }}>
-                  <div style={{ fontSize: 10, color: C.faint, marginBottom: 2 }}>corners par mi-temps (optionnel) · tous lieux confondus</div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                    {stats.mt1Series && (
-                      <span>
-                        1ère MT : <b style={{ color: C.text }}>{stats.mt1Series.moyObtenus.toFixed(2)}</b>/
-                        <b style={{ color: C.text }}>{stats.mt1Series.moyConcedes.toFixed(2)}</b> · part{" "}
-                        {stats.mt1Series.part.toFixed(0)}% · EWMA {stats.mt1Series.ewma >= 0 ? "+" : ""}
-                        {stats.mt1Series.ewma.toFixed(2)} · vol ±{stats.mt1Series.volatilite.toFixed(2)}{" "}
-                        <VolBadge vol={stats.mt1Series.volatilite} volSource="historique" />
-                      </span>
-                    )}
-                    {stats.mt2Series && (
-                      <span>
-                        2ème MT : <b style={{ color: C.text }}>{stats.mt2Series.moyObtenus.toFixed(2)}</b>/
-                        <b style={{ color: C.text }}>{stats.mt2Series.moyConcedes.toFixed(2)}</b> · part{" "}
-                        {stats.mt2Series.part.toFixed(0)}% · EWMA {stats.mt2Series.ewma >= 0 ? "+" : ""}
-                        {stats.mt2Series.ewma.toFixed(2)} · vol ±{stats.mt2Series.volatilite.toFixed(2)}{" "}
-                        <VolBadge vol={stats.mt2Series.volatilite} volSource="historique" />
-                      </span>
-                    )}
+                  <div>moyenne obtenus <b style={{ color: C.text }}>{stats.moyObtenus.toFixed(2)}</b> · concédés <b style={{ color: C.text }}>{stats.moyConcedes.toFixed(2)}</b></div>
+                  <div>part des corners <b style={{ color: C.text }}>{stats.part.toFixed(0)}%</b> · EWMA <b style={{ color: C.text }}>{stats.ewma >= 0 ? "+" : ""}{stats.ewma.toFixed(2)}</b></div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    volatilité totale (écart-type) <b style={{ color: C.text }}>±{stats.volatilite.toFixed(2)}</b>
+                    <Pill color={volatiliteLabel(stats.volatilite).color}>{volatiliteLabel(stats.volatilite).label}</Pill>
                   </div>
                   {(() => {
-                    const sig1 = stats.mt1Series && stats.mt1Series.n >= 3 ? computeVolumeSignal(stats.mt1Series) : null;
-                    const sig2 = stats.mt2Series && stats.mt2Series.n >= 3 ? computeVolumeSignal(stats.mt2Series) : null;
-                    if (!sig1 && !sig2) return null;
+                    const s5 = computeHistoryStats(team.matches.slice(0, 5));
+                    const s10 = computeHistoryStats(team.matches.slice(0, 10));
+                    if (!s5 || team.matches.length < 5) return null;
+                    const diff = (s) => (s.moyObtenus - s.moyConcedes >= 0 ? "+" : "") + (s.moyObtenus - s.moyConcedes).toFixed(2);
+                    const mtDiff = (s, key) => {
+                      const series = s && s[key];
+                      if (!series) return null;
+                      const d = series.moyObtenus - series.moyConcedes;
+                      return (d >= 0 ? "+" : "") + d.toFixed(2);
+                    };
+                    const rows = [
+                      { label: "Total", d5: diff(s5), d10: s10 && team.matches.length >= 10 ? diff(s10) : null },
+                      { label: "1ère MT", d5: mtDiff(s5, "mt1Series"), d10: team.matches.length >= 10 ? mtDiff(s10, "mt1Series") : null },
+                      { label: "2ème MT", d5: mtDiff(s5, "mt2Series"), d10: team.matches.length >= 10 ? mtDiff(s10, "mt2Series") : null },
+                    ];
                     return (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 6 }}>
+                      <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 2, paddingTop: 5 }}>
+                        <div style={{ fontSize: 10, color: C.faint, marginBottom: 2 }}>forme récente (diff. corners obtenus − concédés)</div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                          {rows.map(
+                            (r) =>
+                              r.d5 !== null && (
+                                <div key={r.label} style={{ display: "flex", gap: 12 }}>
+                                  <span style={{ color: C.faint, minWidth: 52, display: "inline-block" }}>{r.label}</span>
+                                  <span>5 derniers : <b style={{ color: C.text }}>{r.d5}</b></span>
+                                  {r.d10 !== null && (
+                                    <span>10 derniers : <b style={{ color: C.text }}>{r.d10}</b></span>
+                                  )}
+                                </div>
+                              )
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                  {stats.tirs && (
+                    <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 2, paddingTop: 5 }}>
+                      <div style={{ fontSize: 10, color: C.faint, marginBottom: 2 }}>
+                        conversion tirs → corners (optionnel, sur {stats.tirs.n} match{stats.tirs.n > 1 ? "s" : ""})
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                        {stats.tirs.ratioTotal !== null && (
+                          <span>Total : <b style={{ color: C.text }}>{stats.tirs.ratioTotal.toFixed(2)}</b> corner/tir</span>
+                        )}
+                        {stats.tirs.ratioObtenu !== null && (
+                          <span>Obtenu : <b style={{ color: C.text }}>{stats.tirs.ratioObtenu.toFixed(2)}</b> corner/tir ({stats.tirs.moyTirsObtenus.toFixed(1)} tirs/match)</span>
+                        )}
+                        {stats.tirs.ratioConcede !== null && (
+                          <span>Concédé : <b style={{ color: C.text }}>{stats.tirs.ratioConcede.toFixed(2)}</b> corner/tir ({stats.tirs.moyTirsConcedes.toFixed(1)} tirs/match)</span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  {stats.attDang && (
+                    <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 2, paddingTop: 5 }}>
+                      <div style={{ fontSize: 10, color: C.faint, marginBottom: 2 }}>
+                        conversion att. dangereuses → corners (optionnel, sur {stats.attDang.n} match{stats.attDang.n > 1 ? "s" : ""})
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                        {stats.attDang.ratioTotal !== null && (
+                          <span>Total : <b style={{ color: C.text }}>{stats.attDang.ratioTotal.toFixed(2)}</b> corner/att.</span>
+                        )}
+                        {stats.attDang.ratioObtenu !== null && (
+                          <span>Obtenu : <b style={{ color: C.text }}>{stats.attDang.ratioObtenu.toFixed(2)}</b> corner/att. ({stats.attDang.moyAttObtenus.toFixed(1)} att./match)</span>
+                        )}
+                        {stats.attDang.ratioConcede !== null && (
+                          <span>Concédé : <b style={{ color: C.text }}>{stats.attDang.ratioConcede.toFixed(2)}</b> corner/att. ({stats.attDang.moyAttConcedes.toFixed(1)} att./match)</span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  {(stats.mt1Series || stats.mt2Series) && (
+                    <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 2, paddingTop: 5 }}>
+                      <div style={{ fontSize: 10, color: C.faint, marginBottom: 2 }}>corners par mi-temps (optionnel) · tous lieux confondus</div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                        {stats.mt1Series && (
+                          <span>
+                            1ère MT : <b style={{ color: C.text }}>{stats.mt1Series.moyObtenus.toFixed(2)}</b>/
+                            <b style={{ color: C.text }}>{stats.mt1Series.moyConcedes.toFixed(2)}</b> · part{" "}
+                            {stats.mt1Series.part.toFixed(0)}% · EWMA {stats.mt1Series.ewma >= 0 ? "+" : ""}
+                            {stats.mt1Series.ewma.toFixed(2)} · vol ±{stats.mt1Series.volatilite.toFixed(2)}{" "}
+                            <VolBadge vol={stats.mt1Series.volatilite} volSource="historique" />
+                          </span>
+                        )}
+                        {stats.mt2Series && (
+                          <span>
+                            2ème MT : <b style={{ color: C.text }}>{stats.mt2Series.moyObtenus.toFixed(2)}</b>/
+                            <b style={{ color: C.text }}>{stats.mt2Series.moyConcedes.toFixed(2)}</b> · part{" "}
+                            {stats.mt2Series.part.toFixed(0)}% · EWMA {stats.mt2Series.ewma >= 0 ? "+" : ""}
+                            {stats.mt2Series.ewma.toFixed(2)} · vol ±{stats.mt2Series.volatilite.toFixed(2)}{" "}
+                            <VolBadge vol={stats.mt2Series.volatilite} volSource="historique" />
+                          </span>
+                        )}
+                      </div>
+                      {(() => {
+                        const sig1 = stats.mt1Series && stats.mt1Series.n >= 3 ? computeVolumeSignal(stats.mt1Series) : null;
+                        const sig2 = stats.mt2Series && stats.mt2Series.n >= 3 ? computeVolumeSignal(stats.mt2Series) : null;
+                        if (!sig1 && !sig2) return null;
+                        return (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 6 }}>
+                            {[
+                              { label: "1MT", sig: sig1 },
+                              { label: "2MT", sig: sig2 },
+                            ].map(
+                              ({ label, sig }) =>
+                                sig && (
+                                  <div key={label} style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                                    <span style={{ color: C.faint, minWidth: 30, display: "inline-block" }}>{label}</span>
+                                    <Pill color={sig.fort ? C.solide : C.jouable}>
+                                      {sig.fort ? "🔥 handicap -0.75 / -1.0" : "handicap sécurisé -0.25"}
+                                    </Pill>
+                                    <span style={{ color: C.faint, fontSize: 10 }}>
+                                      vol. projeté {sig.totalProjete.toFixed(2)} · ±{sig.vol.toFixed(2)}
+                                    </span>
+                                  </div>
+                                )
+                            )}
+                            <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic" }}>
+                              basé sur l'historique propre de {team.nom || "l'équipe"} uniquement (tous adversaires confondus) — le Comparateur affine ce signal en croisant avec l'adversaire du duel
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+                  {(stats.vndTotal || stats.vndMT1 || stats.vndMT2) && (
+                    <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 2, paddingTop: 5 }}>
+                      <div style={{ fontSize: 10, color: C.faint, marginBottom: 3 }}>duel des corners — Vic/Nul/Déf</div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr repeat(4, auto)", gap: "2px 8px", fontSize: 11 }}>
+                        <span style={{ color: C.faint }}></span>
+                        <span style={{ color: C.faint }}>Vic</span>
+                        <span style={{ color: C.faint }}>Nul</span>
+                        <span style={{ color: C.faint }}>Déf</span>
+                        <span style={{ color: C.faint }}>%vict.</span>
                         {[
-                          { label: "1MT", sig: sig1 },
-                          { label: "2MT", sig: sig2 },
+                          { label: "Total", v: stats.vndTotal },
+                          { label: "1ère MT", v: stats.vndMT1 },
+                          { label: "2ème MT", v: stats.vndMT2 },
                         ].map(
-                          ({ label, sig }) =>
-                            sig && (
-                              <div key={label} style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                                <span style={{ color: C.faint, minWidth: 30, display: "inline-block" }}>{label}</span>
-                                <Pill color={sig.fort ? C.solide : C.jouable}>
-                                  {sig.fort ? "🔥 handicap -0.75 / -1.0" : "handicap sécurisé -0.25"}
-                                </Pill>
-                                <span style={{ color: C.faint, fontSize: 10 }}>
-                                  vol. projeté {sig.totalProjete.toFixed(2)} · ±{sig.vol.toFixed(2)}
-                                </span>
-                              </div>
+                          ({ label, v }) =>
+                            v && (
+                              <React.Fragment key={label}>
+                                <span>{label} ({v.n})</span>
+                                <span style={{ color: C.solide }}>{v.vic}</span>
+                                <span style={{ color: C.faint }}>{v.nul}</span>
+                                <span style={{ color: C.fragile }}>{v.def}</span>
+                                <span style={{ color: C.text, fontWeight: 700 }}>{v.pctVic.toFixed(0)}%</span>
+                              </React.Fragment>
                             )
                         )}
-                        <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic" }}>
-                          basé sur l'historique propre de {team.nom || "l'équipe"} uniquement (tous adversaires confondus) — le Comparateur affine ce signal en croisant avec l'adversaire du duel
-                        </div>
                       </div>
-                    );
-                  })()}
-                </div>
+                    </div>
+                  )}
+                </Collapsible>
               )}
-              {stats.butsSeries && (
-                <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 2, paddingTop: 5 }}>
-                  <div style={{ fontSize: 10, color: C.faint, marginBottom: 2 }}>buts — match complet (optionnel) · tous lieux confondus</div>
-                  <div>
-                    <b style={{ color: C.text }}>{stats.butsSeries.moyObtenus.toFixed(2)}</b>/
-                    <b style={{ color: C.text }}>{stats.butsSeries.moyConcedes.toFixed(2)}</b> · part{" "}
-                    {stats.butsSeries.part.toFixed(0)}% · EWMA {stats.butsSeries.ewma >= 0 ? "+" : ""}
-                    {stats.butsSeries.ewma.toFixed(2)} · vol ±{stats.butsSeries.volatilite.toFixed(2)}{" "}
-                    <VolBadge vol={stats.butsSeries.volatilite} volSource="historique" />
+
+              {butsStats && (
+                <Collapsible title="🥅 Forebet (buts & mi-temps)" badge={`${butsStats.n} match${butsStats.n > 1 ? "s" : ""}`} color={color}>
+                  <ButsStatsBlock b={butsStats} teamName={team.nom} />
+                </Collapsible>
+              )}
+
+              {combinedStats && (
+                <Collapsible title="🔗 Combiné (dates recoupées)" badge={`${combinedStats.n} match${combinedStats.n > 1 ? "s" : ""}`} color={color}>
+                  <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic", marginBottom: 2 }}>
+                    matchs où TotalCorner ET Forebet couvrent la même date — buts, mi-temps et attaques dangereuses uniquement (corners exclus)
                   </div>
-                  {(() => {
-                    const form = stats.butsSeries.n >= 3 ? computeFormLabel(stats.butsSeries) : null;
-                    if (!form) return null;
-                    return (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 6 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                          <Pill color={form.color}>{form.label}</Pill>
-                          <span style={{ color: C.faint, fontSize: 10 }}>ratio {form.ratio.toFixed(2)}× (EWMA / volatilité)</span>
-                        </div>
-                        <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic" }}>
-                          contrairement au badge volume des corners (seuil fixe), ce badge s'appuie sur le ratio propre
-                          à {team.nom || "l'équipe"} — plus adapté aux buts, plus rares et plus volatils par match que les corners
-                        </div>
+                  <ButsStatsBlock b={combinedStats.buts} teamName={team.nom} />
+                  {combinedStats.attDangSeries && (
+                    <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 2, paddingTop: 5 }}>
+                      <div style={{ fontSize: 10, color: C.faint, marginBottom: 2 }}>attaques dangereuses (optionnel) · tous lieux confondus</div>
+                      <div>
+                        <b style={{ color: C.text }}>{combinedStats.attDangSeries.moyObtenus.toFixed(2)}</b>/
+                        <b style={{ color: C.text }}>{combinedStats.attDangSeries.moyConcedes.toFixed(2)}</b> · part{" "}
+                        {combinedStats.attDangSeries.part.toFixed(0)}% · EWMA {combinedStats.attDangSeries.ewma >= 0 ? "+" : ""}
+                        {combinedStats.attDangSeries.ewma.toFixed(2)} · vol ±{combinedStats.attDangSeries.volatilite.toFixed(2)}{" "}
+                        <VolBadge vol={combinedStats.attDangSeries.volatilite} volSource="historique" />
                       </div>
-                    );
-                  })()}
-                </div>
-              )}
-              {(stats.vndTotal || stats.vndMT1 || stats.vndMT2) && (
-                <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 2, paddingTop: 5 }}>
-                  <div style={{ fontSize: 10, color: C.faint, marginBottom: 3 }}>duel des corners — Vic/Nul/Déf</div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr repeat(4, auto)", gap: "2px 8px", fontSize: 11 }}>
-                    <span style={{ color: C.faint }}></span>
-                    <span style={{ color: C.faint }}>Vic</span>
-                    <span style={{ color: C.faint }}>Nul</span>
-                    <span style={{ color: C.faint }}>Déf</span>
-                    <span style={{ color: C.faint }}>%vict.</span>
-                    {[
-                      { label: "Total", v: stats.vndTotal },
-                      { label: "1ère MT", v: stats.vndMT1 },
-                      { label: "2ème MT", v: stats.vndMT2 },
-                    ].map(
-                      ({ label, v }) =>
-                        v && (
-                          <React.Fragment key={label}>
-                            <span>{label} ({v.n})</span>
-                            <span style={{ color: C.solide }}>{v.vic}</span>
-                            <span style={{ color: C.faint }}>{v.nul}</span>
-                            <span style={{ color: C.fragile }}>{v.def}</span>
-                            <span style={{ color: C.text, fontWeight: 700 }}>{v.pctVic.toFixed(0)}%</span>
-                          </React.Fragment>
-                        )
-                    )}
-                  </div>
-                </div>
+                      {combinedStats.vndAttDang && (
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr repeat(4, auto)", gap: "2px 8px", fontSize: 11, marginTop: 4 }}>
+                          <span style={{ color: C.faint }}></span>
+                          <span style={{ color: C.faint }}>Vic</span>
+                          <span style={{ color: C.faint }}>Nul</span>
+                          <span style={{ color: C.faint }}>Déf</span>
+                          <span style={{ color: C.faint }}>%vict.</span>
+                          <span>Duel ({combinedStats.vndAttDang.n})</span>
+                          <span style={{ color: C.solide }}>{combinedStats.vndAttDang.vic}</span>
+                          <span style={{ color: C.faint }}>{combinedStats.vndAttDang.nul}</span>
+                          <span style={{ color: C.fragile }}>{combinedStats.vndAttDang.def}</span>
+                          <span style={{ color: C.text, fontWeight: 700 }}>{combinedStats.vndAttDang.pctVic.toFixed(0)}%</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </Collapsible>
               )}
             </div>
           ) : (
@@ -5367,6 +5548,224 @@ function StatCard({ label, value, sub, valueColor }) {
     </div>
   );
 }
+/* ---------------------------------------------------------------
+   FDR — FIXTURE DIFFICULTY RATING (modèle fourni par l'utilisateur)
+   4 variables pondérées (adversaire 50% / forme 30% / terrain 15% / H2H 5%),
+   chacune notée 1 à 5, somme pondérée → score 1.0 à 5.0, converti en palier
+   de difficulté couleur. Voir barèmes ci-dessous, recopiés tels quels.
+--------------------------------------------------------------- */
+const FDR_WEIGHTS = { adversaire: 0.5, forme: 0.3, terrain: 0.15, h2h: 0.05 };
+
+function fdrScoreAdversaire(ppm) {
+  const v = num(ppm);
+  if (v >= 2.2) return 5;
+  if (v >= 1.6) return 4;
+  if (v >= 1.1) return 3;
+  if (v >= 0.7) return 2;
+  return 1;
+}
+function fdrScoreForme(points, window = 5) {
+  const v = num(points);
+  const cfg = FDR_FORME_WINDOWS[window] || FDR_FORME_WINDOWS[5];
+  for (const t of cfg.thresholds) {
+    if (v >= t.min) return t.score;
+  }
+  return 1;
+}
+/* Fenêtre de "forme récente" — l'utilisateur hésite entre 5 et 6 matchs. Sur 5 matchs le
+   max est 15 pts (3×5), sur 6 matchs 18 pts (3×6) ; les seuils sont recalculés au même
+   pourcentage du max pour garder le même découpage 5/4/3/2/1 dans les deux cas. */
+const FDR_FORME_WINDOWS = {
+  5: { max: 15, thresholds: [{ min: 13, score: 5 }, { min: 10, score: 4 }, { min: 7, score: 3 }, { min: 4, score: 2 }, { min: 0, score: 1 }] },
+  6: { max: 18, thresholds: [{ min: 16, score: 5 }, { min: 12, score: 4 }, { min: 8, score: 3 }, { min: 5, score: 2 }, { min: 0, score: 1 }] },
+};
+const FDR_VENUE_OPTIONS = [
+  { id: "E", label: "Extérieur", score: 4 },
+  { id: "N", label: "Neutre", score: 3 },
+  { id: "D", label: "Domicile", score: 2 },
+];
+const FDR_H2H_OPTIONS = [
+  { id: "adversaire", label: "Adversaire a gagné les 3", sub: "Bête noire historique", score: 5 },
+  { id: "neutre", label: "Historique partagé / neutre", sub: "Aucun historique récent tranché", score: 3 },
+  { id: "nous", label: "Votre équipe a gagné les 3", sub: "Ascendant psychologique", score: 1 },
+];
+const FDR_BANDS = [
+  { max: 1.8, label: "Très facile", emoji: "🟩", color: C.solide },
+  { max: 2.6, label: "Abordable", emoji: "🟢", color: C.solide },
+  { max: 3.4, label: "Équilibré", emoji: "🟠", color: C.jouable },
+  { max: 4.2, label: "Difficile", emoji: "🔴", color: C.fragile },
+  { max: Infinity, label: "Très difficile", emoji: "🟣", color: "#B26BFF" },
+];
+function fdrBand(score) {
+  return FDR_BANDS.find((b) => score < b.max) || FDR_BANDS[FDR_BANDS.length - 1];
+}
+function computeFDR({ ppm, forme, formeWindow = 5, venueId, h2hId }) {
+  const v1 = fdrScoreAdversaire(ppm);
+  const v2 = fdrScoreForme(forme, formeWindow);
+  const v3 = (FDR_VENUE_OPTIONS.find((o) => o.id === venueId) || FDR_VENUE_OPTIONS[2]).score;
+  const v4 = (FDR_H2H_OPTIONS.find((o) => o.id === h2hId) || FDR_H2H_OPTIONS[1]).score;
+  const score = v1 * FDR_WEIGHTS.adversaire + v2 * FDR_WEIGHTS.forme + v3 * FDR_WEIGHTS.terrain + v4 * FDR_WEIGHTS.h2h;
+  return { v1, v2, v3, v4, score, band: fdrBand(score) };
+}
+
+function FDRRow({ label, sub, weight, note, contribution }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto auto", gap: "2px 10px", alignItems: "baseline", padding: "6px 0", borderBottom: `1px solid ${C.line}` }}>
+      <div>
+        <div style={{ fontSize: 12, color: C.text, fontFamily: FONT_BODY }}>{label}</div>
+        {sub && <div style={{ fontSize: 9.5, color: C.faint }}>{sub}</div>}
+      </div>
+      <span style={{ fontSize: 10.5, color: C.faint, fontFamily: FONT_MONO }}>poids {(weight * 100).toFixed(0)}%</span>
+      <span style={{ fontSize: 12, color: C.text, fontFamily: FONT_MONO, fontWeight: 700 }}>note {note}/5</span>
+      <span style={{ fontSize: 12, color: C.dim, fontFamily: FONT_MONO }}>+{contribution.toFixed(2)}</span>
+    </div>
+  );
+}
+
+function FDRTab() {
+  const [ppm, setPpm] = useState("");
+  const [forme, setForme] = useState("");
+  const [formeWindow, setFormeWindow] = useState(5);
+  const [venueId, setVenueId] = useState("D");
+  const [h2hId, setH2hId] = useState("neutre");
+
+  const hasInput = ppm !== "" || forme !== "";
+  const r = computeFDR({ ppm, forme, formeWindow, venueId, h2hId });
+  const formeCfg = FDR_FORME_WINDOWS[formeWindow];
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <SectionTitle sub="niveau adv. 50% · forme 30% · terrain 15% · H2H 5%">FDR — Difficulté du match</SectionTitle>
+
+      <div style={{ background: C.surface2, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+        <Field label="Niveau de l'adversaire (PPM saison)">
+          <NumInput value={ppm} onChange={setPpm} placeholder="1.85" accent={C.teamB} />
+        </Field>
+        <div style={{ fontSize: 9.5, color: C.faint, marginTop: -6 }}>
+          ≥2.2 cador (5) · 1.6-2.1 forte (4) · 1.1-1.5 moyenne (3) · 0.7-1.0 faible (2) · &lt;0.7 très faible (1)
+        </div>
+
+        <Field label="Forme récente (points cumulés)">
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <div style={{ flex: 1 }}>
+              <NumInput value={forme} onChange={setForme} placeholder={formeWindow === 5 ? "9" : "11"} accent={C.teamB} />
+            </div>
+            <div style={{ display: "flex", background: C.bg, borderRadius: 8, padding: 2, flexShrink: 0 }}>
+              {[5, 6].map((w) => (
+                <button
+                  key={w}
+                  onClick={() => setFormeWindow(w)}
+                  style={{
+                    fontSize: 10.5,
+                    fontWeight: 700,
+                    padding: "6px 9px",
+                    borderRadius: 6,
+                    border: "none",
+                    background: formeWindow === w ? C.teamB + "22" : "transparent",
+                    color: formeWindow === w ? C.teamB : C.faint,
+                    cursor: "pointer",
+                  }}
+                >
+                  {w} matchs
+                </button>
+              ))}
+            </div>
+          </div>
+        </Field>
+        <div style={{ fontSize: 9.5, color: C.faint, marginTop: -6 }}>
+          sur {formeWindow} matchs (max {formeCfg.max} pts) :{" "}
+          {formeCfg.thresholds.map((t, i) => {
+            const nextMin = i > 0 ? formeCfg.thresholds[i - 1].min - 1 : formeCfg.max;
+            return `${t.min}-${nextMin} (${t.score})`;
+          }).join(" · ")}
+        </div>
+
+        <Field label="Lieu du match">
+          <div style={{ display: "flex", gap: 6 }}>
+            {FDR_VENUE_OPTIONS.map((o) => (
+              <button
+                key={o.id}
+                onClick={() => setVenueId(o.id)}
+                style={{
+                  flex: 1,
+                  fontSize: 11.5,
+                  fontWeight: 700,
+                  padding: "7px 4px",
+                  borderRadius: 8,
+                  border: `1px solid ${venueId === o.id ? C.teamB + "88" : C.line}`,
+                  background: venueId === o.id ? C.teamB + "22" : "transparent",
+                  color: venueId === o.id ? C.teamB : C.faint,
+                  cursor: "pointer",
+                }}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+        </Field>
+
+        <Field label="Confrontations directes (H2H, 3 derniers matchs)">
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {FDR_H2H_OPTIONS.map((o) => (
+              <button
+                key={o.id}
+                onClick={() => setH2hId(o.id)}
+                style={{
+                  textAlign: "left",
+                  fontSize: 11.5,
+                  padding: "8px 10px",
+                  borderRadius: 8,
+                  border: `1px solid ${h2hId === o.id ? C.teamB + "88" : C.line}`,
+                  background: h2hId === o.id ? C.teamB + "22" : "transparent",
+                  color: h2hId === o.id ? C.text : C.faint,
+                  cursor: "pointer",
+                }}
+              >
+                <div style={{ fontWeight: 700 }}>{o.label}</div>
+                <div style={{ fontSize: 9.5, color: C.faint }}>{o.sub}</div>
+              </button>
+            ))}
+          </div>
+        </Field>
+      </div>
+
+      {hasInput && (
+        <div style={{ background: C.surface2, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 4 }}>
+          <div style={{ fontSize: 10, color: C.faint, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 2 }}>Détail du calcul</div>
+          <FDRRow label="Niveau adversaire" weight={FDR_WEIGHTS.adversaire} note={r.v1} contribution={r.v1 * FDR_WEIGHTS.adversaire} />
+          <FDRRow label="Forme récente" weight={FDR_WEIGHTS.forme} note={r.v2} contribution={r.v2 * FDR_WEIGHTS.forme} />
+          <FDRRow label="Terrain" sub={FDR_VENUE_OPTIONS.find((o) => o.id === venueId)?.label} weight={FDR_WEIGHTS.terrain} note={r.v3} contribution={r.v3 * FDR_WEIGHTS.terrain} />
+          <FDRRow label="H2H" sub={FDR_H2H_OPTIONS.find((o) => o.id === h2hId)?.sub} weight={FDR_WEIGHTS.h2h} note={r.v4} contribution={r.v4 * FDR_WEIGHTS.h2h} />
+
+          <div style={{ marginTop: 12, display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: "14px 10px", borderRadius: 10, background: r.band.color + "18", border: `1px solid ${r.band.color}55` }}>
+            <div style={{ fontSize: 11, color: C.faint, letterSpacing: 0.3, textTransform: "uppercase" }}>Score FDR</div>
+            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 40, fontWeight: 800, color: r.band.color, lineHeight: 1 }}>{r.score.toFixed(2)}</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: r.band.color }}>{r.band.emoji} {r.band.label}</div>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 10, fontSize: 10, color: C.faint, fontFamily: FONT_MONO }}>
+            {FDR_BANDS.map((b, i) => {
+              const min = i === 0 ? 1.0 : FDR_BANDS[i - 1].max;
+              const active = r.band === b;
+              return (
+                <div key={b.label} style={{ display: "flex", alignItems: "center", gap: 6, opacity: active ? 1 : 0.5, fontWeight: active ? 700 : 400 }}>
+                  <span>{b.emoji}</span>
+                  <span style={{ minWidth: 90 }}>{min.toFixed(1)} – {b.max === Infinity ? "5.0" : `<${b.max.toFixed(1)}`}</span>
+                  <span style={{ color: active ? b.color : C.faint }}>{b.label}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {!hasInput && (
+        <EmptyState title="Renseigne le match" text="PPM de l'adversaire et forme récente au minimum pour obtenir un score FDR." />
+      )}
+    </div>
+  );
+}
+
 function BilanTab({ stats }) {
   if (!stats.total) return <EmptyState title="Pas encore de bilan" text="Suis quelques paris pour voir ton taux de réussite et ton P/L ici." />;
   const plColor = stats.cumul >= 0 ? C.solide : C.fragile;
@@ -5617,6 +6016,7 @@ export default function App() {
 
   const tabs = [
     { id: "comparateur", label: "Comparateur", icon: Target },
+    { id: "fdr", label: "FDR", icon: Gauge },
     { id: "historique", label: "Historique", icon: ClipboardList },
     { id: "bilan", label: "Bilan", icon: BarChart3 },
   ];
@@ -5652,6 +6052,8 @@ export default function App() {
                   : lastSaved
                   ? `Sauvegardé à ${lastSaved.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}`
                   : "En attente de sauvegarde"
+                : tab === "fdr"
+                ? "Difficulté du match (FDR)"
                 : "Comparateur d'équipes · corners"}
             </div>
           </div>
@@ -5755,6 +6157,8 @@ export default function App() {
           </div>
         ) : tab === "comparateur" ? (
           <ComparateurTab teamA={teamA} setTeamA={setTeamA} teamB={teamB} setTeamB={setTeamB} lignes={lignes} setLignes={setLignes} individuels={individuels} setIndividuels={setIndividuels} h2h={h2h} setH2h={setH2h} onAddBet={addBet} />
+        ) : tab === "fdr" ? (
+          <FDRTab />
         ) : tab === "historique" ? (
           <HistoriqueTab bets={bets} setResult={setResult} removeBet={removeBet} addManualBet={addBet} updateCote={updateCote} />
         ) : (
