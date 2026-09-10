@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   Plus, Trash2, Check, X, Minus, RotateCcw, Target,
   ClipboardList, BarChart3, Flag, Loader2, ArrowRightLeft, Camera,
-  ChevronDown, ChevronUp, Gauge
+  ChevronDown, ChevronUp
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
@@ -2504,9 +2504,11 @@ function TeamProfileForm({ team, setTeam, color, label }) {
   // visible/éditable en entier quel que soit le filtre choisi
   const excludedLigues = team.excludedLigues || [];
   const filteredMatches = applyMatchFilters(team);
+  const [fdrFormeWindow, setFdrFormeWindow] = useState(5);
   const toggleLigue = (name) =>
     setTeam({ ...team, excludedLigues: excludedLigues.includes(name) ? excludedLigues.filter((l) => l !== name) : [...excludedLigues, name] });
   const stats = computeHistoryStats(filteredMatches, 0.25, !!team.useAdvanced);
+  const fdrInputs = computeTeamFDRInputs(filteredMatches, fdrFormeWindow);
   // trois visuels pliables/dépliables séparés par source de données : TotalCorner
   // (corners), Forebet (buts, indépendant des corners) et Combiné (matchs recoupés PAR
   // DATE entre les deux sources — buts + buts 1MT + att. dangereuses uniquement, pas de
@@ -2563,22 +2565,28 @@ function TeamProfileForm({ team, setTeam, color, label }) {
         </div>
       ) : (
         <>
-          <MatchHistoryRows
-            matches={team.matches}
-            setMatches={setMatches}
+          <Collapsible
+            title="📋 Historique des matchs"
+            badge={`${team.matches.length} match${team.matches.length > 1 ? "s" : ""}`}
             color={color}
-            teamName={team.nom}
-            useAdvanced={!!team.useAdvanced}
-            onToggleAdvanced={() => setTeam({ ...team, useAdvanced: !team.useAdvanced })}
-            excludedLigues={excludedLigues}
-            onToggleLigue={toggleLigue}
-            onTeamNameDetected={(nom) => setTeam((prev) => ({ ...prev, nom }))}
-            limitRecent={!!team.limitRecent}
-            recentCount={team.recentCount ?? 10}
-            onToggleRecent={() => setTeam({ ...team, limitRecent: !team.limitRecent })}
-            onChangeRecentCount={(v) => setTeam({ ...team, recentCount: v })}
-          />
-          {(stats || butsStats || combinedStats) ? (
+          >
+            <MatchHistoryRows
+              matches={team.matches}
+              setMatches={setMatches}
+              color={color}
+              teamName={team.nom}
+              useAdvanced={!!team.useAdvanced}
+              onToggleAdvanced={() => setTeam({ ...team, useAdvanced: !team.useAdvanced })}
+              excludedLigues={excludedLigues}
+              onToggleLigue={toggleLigue}
+              onTeamNameDetected={(nom) => setTeam((prev) => ({ ...prev, nom }))}
+              limitRecent={!!team.limitRecent}
+              recentCount={team.recentCount ?? 10}
+              onToggleRecent={() => setTeam({ ...team, limitRecent: !team.limitRecent })}
+              onChangeRecentCount={(v) => setTeam({ ...team, recentCount: v })}
+            />
+          </Collapsible>
+          {(stats || butsStats || combinedStats || fdrInputs) ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {stats && (
                 <Collapsible title="📊 TotalCorners" badge={`${stats.n} match${stats.n > 1 ? "s" : ""}`} color={color}>
@@ -2791,6 +2799,38 @@ function TeamProfileForm({ team, setTeam, color, label }) {
                       )}
                     </div>
                   )}
+                </Collapsible>
+              )}
+
+              {fdrInputs && (
+                <Collapsible title="🎯 FDR (niveau + forme, auto)" badge={`${fdrInputs.n} match${fdrInputs.n > 1 ? "s" : ""}`} color={color}>
+                  <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic", marginBottom: 2 }}>
+                    calculé automatiquement depuis les buts déjà saisis (Forebet) — le lieu et les confrontations directes se combinent dans le Comparateur pour donner le score FDR complet
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                    <span>
+                      PPM saison : <b style={{ color: C.text }}>{fdrInputs.ppm !== null ? fdrInputs.ppm.toFixed(2) : "—"}</b>{" "}
+                      <span style={{ color: C.faint }}>(note {fdrScoreAdversaire(fdrInputs.ppm)}/5)</span>
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                    <span>
+                      Forme /{fdrFormeWindow} : <b style={{ color: C.text }}>{fdrInputs.formePoints !== null ? fdrInputs.formePoints : "—"}</b> pt
+                      {fdrInputs.formeN < fdrFormeWindow ? ` (sur ${fdrInputs.formeN} match${fdrInputs.formeN > 1 ? "s" : ""} dispo.)` : ""}{" "}
+                      <span style={{ color: C.faint }}>(note {fdrScoreForme(fdrInputs.formePoints, fdrFormeWindow)}/5)</span>
+                    </span>
+                    <div style={{ display: "flex", background: C.bg, borderRadius: 8, padding: 2, flexShrink: 0 }}>
+                      {[5, 6].map((w) => (
+                        <button
+                          key={w}
+                          onClick={() => setFdrFormeWindow(w)}
+                          style={{ fontSize: 10, fontWeight: 700, padding: "4px 7px", borderRadius: 6, border: "none", background: fdrFormeWindow === w ? color + "22" : "transparent", color: fdrFormeWindow === w ? color : C.faint, cursor: "pointer" }}
+                        >
+                          {w}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </Collapsible>
               )}
             </div>
@@ -4417,6 +4457,8 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
   // même filtre compétition que dans le profil solo — appliqué ici aussi pour que le
   // duel reste cohérent avec ce que l'utilisateur a choisi de regarder par équipe
   const filterMatches = (team) => ({ ...team, matches: applyMatchFilters(team) });
+  const matchesAFiltered = filterMatches(teamA).matches;
+  const matchesBFiltered = filterMatches(teamB).matches;
   const effA = pickVenueStats(filterMatches(teamA), "D");
   const effB = pickVenueStats(filterMatches(teamB), "E");
   // stats tous lieux confondus (pas de filtre domicile/extérieur) — pour le panneau
@@ -5135,6 +5177,8 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
 
       <EloPanel teamAName={teamA.nom} teamBName={teamB.nom} />
 
+      <FdrMatchSection teamAName={teamA.nom} teamBName={teamB.nom} matchesA={matchesAFiltered} matchesB={matchesBFiltered} h2h={h2hEffective} />
+
       <SecondaryStatPanel
         label="Tirs"
         unit="tirs"
@@ -5622,147 +5666,123 @@ function FDRRow({ label, sub, weight, note, contribution }) {
   );
 }
 
-function FDRTab() {
-  const [ppm, setPpm] = useState("");
-  const [forme, setForme] = useState("");
-  const [formeWindow, setFormeWindow] = useState(5);
-  const [venueId, setVenueId] = useState("D");
-  const [h2hId, setH2hId] = useState("neutre");
+/* Auto-calcul des variables 1 (PPM saison) et 2 (forme récente) à partir du SEUL
+   historique de buts déjà saisi pour une équipe (Forebet) — aucune saisie manuelle,
+   contrairement à l'ancienne version. "forme récente" = points (3/1/0) cumulés sur les
+   formeWindow derniers matchs (5 ou 6), matches supposé trié du plus récent en haut. */
+function computeTeamFDRInputs(matches, formeWindow = 5) {
+  const vndSeason = computeVND(matches, "butsObtenus", "butsConcedes");
+  if (!vndSeason) return null;
+  const ppm = ppgFromVnd(vndSeason);
+  const recent = (matches || []).slice(0, formeWindow);
+  const vndRecent = computeVND(recent, "butsObtenus", "butsConcedes");
+  const formePoints = vndRecent ? vndRecent.vic * 3 + vndRecent.nul : null;
+  const formeN = vndRecent ? vndRecent.n : 0;
+  return { ppm, n: vndSeason.n, formePoints, formeN, formeWindow };
+}
 
-  const hasInput = ppm !== "" || forme !== "";
-  const r = computeFDR({ ppm, forme, formeWindow, venueId, h2hId });
-  const formeCfg = FDR_FORME_WINDOWS[formeWindow];
+/* Auto-détection du barème H2H à partir des confrontations directes déjà saisies dans
+   le Comparateur (section H2H) — plus de sélection manuelle. perspective "A" : on
+   regarde si l'ADVERSAIRE DE A (= équipe B) a gagné les 3 dernières confrontations, etc.
+   Sous 2 confrontations valides, retombe sur "neutre" (pas assez d'historique pour
+   trancher). */
+function computeH2hFDRId(h2h, perspective = "A") {
+  const valid = (h2h || []).filter((m) => m.butsA !== "" && m.butsA !== undefined && m.butsB !== "" && m.butsB !== undefined);
+  const recent = valid.slice(0, 3);
+  if (recent.length < 2) return "neutre";
+  const winsA = recent.filter((m) => num(m.butsA) > num(m.butsB)).length;
+  const winsB = recent.filter((m) => num(m.butsB) > num(m.butsA)).length;
+  const winsAdv = perspective === "A" ? winsB : winsA;
+  const winsUs = perspective === "A" ? winsA : winsB;
+  if (winsAdv === recent.length) return "adversaire";
+  if (winsUs === recent.length) return "nous";
+  return "neutre";
+}
+
+/* Section FDR complète pour le duel — 100% auto (PPM + forme calculés depuis les buts
+   déjà saisis, H2H auto-détecté depuis la section H2H du comparateur) ; seul "qui reçoit"
+   reste un choix (propre à CE match précis, non déductible de l'historique). Calcule et
+   affiche le score des DEUX équipes en simultané (symétrique : ce qui est dur pour A est
+   généralement facile pour B et inversement). */
+function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h }) {
+  const [formeWindow, setFormeWindow] = useState(5);
+  const [venue, setVenue] = useState("A"); // "A" = A à domicile, "N" = neutre, "B" = B à domicile
+
+  const inputsA = computeTeamFDRInputs(matchesA, formeWindow);
+  const inputsB = computeTeamFDRInputs(matchesB, formeWindow);
+  if (!inputsA && !inputsB) return null;
+
+  const venueForA = venue === "A" ? "D" : venue === "B" ? "E" : "N";
+  const venueForB = venue === "B" ? "D" : venue === "A" ? "E" : "N";
+  const h2hForA = computeH2hFDRId(h2h, "A");
+  const h2hForB = computeH2hFDRId(h2h, "B");
+
+  const rA = inputsB ? computeFDR({ ppm: inputsB.ppm, forme: inputsB.formePoints, formeWindow, venueId: venueForA, h2hId: h2hForA }) : null;
+  const rB = inputsA ? computeFDR({ ppm: inputsA.ppm, forme: inputsA.formePoints, formeWindow, venueId: venueForB, h2hId: h2hForB }) : null;
+
+  const Card = ({ name, color, r, missing }) => (
+    <div style={{ flex: 1, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 10, padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ fontSize: 10.5, color, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3 }}>{name || "Équipe"}</div>
+      {missing ? (
+        <div style={{ fontSize: 10.5, color: C.faint }}>Pas de buts saisis (Forebet) pour cette équipe.</div>
+      ) : (
+        <>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+            <span style={{ fontFamily: FONT_DISPLAY, fontSize: 30, fontWeight: 800, color: r.band.color }}>{r.score.toFixed(2)}</span>
+            <span style={{ fontSize: 11, fontWeight: 700, color: r.band.color }}>{r.band.emoji} {r.band.label}</span>
+          </div>
+          <FDRRow label="Niveau adversaire" weight={FDR_WEIGHTS.adversaire} note={r.v1} contribution={r.v1 * FDR_WEIGHTS.adversaire} />
+          <FDRRow label="Forme adversaire" weight={FDR_WEIGHTS.forme} note={r.v2} contribution={r.v2 * FDR_WEIGHTS.forme} />
+          <FDRRow label="Terrain" sub={FDR_VENUE_OPTIONS.find((o) => o.id === (color === C.teamA ? venueForA : venueForB))?.label} weight={FDR_WEIGHTS.terrain} note={r.v3} contribution={r.v3 * FDR_WEIGHTS.terrain} />
+          <FDRRow label="H2H" sub={FDR_H2H_OPTIONS.find((o) => o.id === (color === C.teamA ? h2hForA : h2hForB))?.sub} weight={FDR_WEIGHTS.h2h} note={r.v4} contribution={r.v4 * FDR_WEIGHTS.h2h} />
+        </>
+      )}
+    </div>
+  );
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <SectionTitle sub="niveau adv. 50% · forme 30% · terrain 15% · H2H 5%">FDR — Difficulté du match</SectionTitle>
-
-      <div style={{ background: C.surface2, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
-        <Field label="Niveau de l'adversaire (PPM saison)">
-          <NumInput value={ppm} onChange={setPpm} placeholder="1.85" accent={C.teamB} />
-        </Field>
-        <div style={{ fontSize: 9.5, color: C.faint, marginTop: -6 }}>
-          ≥2.2 cador (5) · 1.6-2.1 forte (4) · 1.1-1.5 moyenne (3) · 0.7-1.0 faible (2) · &lt;0.7 très faible (1)
-        </div>
-
-        <Field label="Forme récente (points cumulés)">
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <div style={{ flex: 1 }}>
-              <NumInput value={forme} onChange={setForme} placeholder={formeWindow === 5 ? "9" : "11"} accent={C.teamB} />
-            </div>
-            <div style={{ display: "flex", background: C.bg, borderRadius: 8, padding: 2, flexShrink: 0 }}>
-              {[5, 6].map((w) => (
-                <button
-                  key={w}
-                  onClick={() => setFormeWindow(w)}
-                  style={{
-                    fontSize: 10.5,
-                    fontWeight: 700,
-                    padding: "6px 9px",
-                    borderRadius: 6,
-                    border: "none",
-                    background: formeWindow === w ? C.teamB + "22" : "transparent",
-                    color: formeWindow === w ? C.teamB : C.faint,
-                    cursor: "pointer",
-                  }}
-                >
-                  {w} matchs
-                </button>
-              ))}
-            </div>
-          </div>
-        </Field>
-        <div style={{ fontSize: 9.5, color: C.faint, marginTop: -6 }}>
-          sur {formeWindow} matchs (max {formeCfg.max} pts) :{" "}
-          {formeCfg.thresholds.map((t, i) => {
-            const nextMin = i > 0 ? formeCfg.thresholds[i - 1].min - 1 : formeCfg.max;
-            return `${t.min}-${nextMin} (${t.score})`;
-          }).join(" · ")}
-        </div>
-
-        <Field label="Lieu du match">
-          <div style={{ display: "flex", gap: 6 }}>
-            {FDR_VENUE_OPTIONS.map((o) => (
+    <section>
+      <SectionTitle sub="niveau adv. 50% · forme 30% · terrain 15% · H2H 5% · auto depuis les buts saisis">FDR — Difficulté du match</SectionTitle>
+      <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+          <div style={{ display: "flex", background: C.bg, borderRadius: 8, padding: 2 }}>
+            {[
+              { id: "A", label: `${teamAName || "A"} 🏠` },
+              { id: "N", label: "Neutre" },
+              { id: "B", label: `${teamBName || "B"} 🏠` },
+            ].map((o) => (
               <button
                 key={o.id}
-                onClick={() => setVenueId(o.id)}
-                style={{
-                  flex: 1,
-                  fontSize: 11.5,
-                  fontWeight: 700,
-                  padding: "7px 4px",
-                  borderRadius: 8,
-                  border: `1px solid ${venueId === o.id ? C.teamB + "88" : C.line}`,
-                  background: venueId === o.id ? C.teamB + "22" : "transparent",
-                  color: venueId === o.id ? C.teamB : C.faint,
-                  cursor: "pointer",
-                }}
+                onClick={() => setVenue(o.id)}
+                style={{ fontSize: 10.5, fontWeight: 700, padding: "5px 8px", borderRadius: 6, border: "none", background: venue === o.id ? C.solide + "22" : "transparent", color: venue === o.id ? C.solide : C.faint, cursor: "pointer" }}
               >
                 {o.label}
               </button>
             ))}
           </div>
-        </Field>
-
-        <Field label="Confrontations directes (H2H, 3 derniers matchs)">
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {FDR_H2H_OPTIONS.map((o) => (
+          <div style={{ display: "flex", background: C.bg, borderRadius: 8, padding: 2 }}>
+            {[5, 6].map((w) => (
               <button
-                key={o.id}
-                onClick={() => setH2hId(o.id)}
-                style={{
-                  textAlign: "left",
-                  fontSize: 11.5,
-                  padding: "8px 10px",
-                  borderRadius: 8,
-                  border: `1px solid ${h2hId === o.id ? C.teamB + "88" : C.line}`,
-                  background: h2hId === o.id ? C.teamB + "22" : "transparent",
-                  color: h2hId === o.id ? C.text : C.faint,
-                  cursor: "pointer",
-                }}
+                key={w}
+                onClick={() => setFormeWindow(w)}
+                style={{ fontSize: 10.5, fontWeight: 700, padding: "5px 8px", borderRadius: 6, border: "none", background: formeWindow === w ? C.solide + "22" : "transparent", color: formeWindow === w ? C.solide : C.faint, cursor: "pointer" }}
               >
-                <div style={{ fontWeight: 700 }}>{o.label}</div>
-                <div style={{ fontSize: 9.5, color: C.faint }}>{o.sub}</div>
+                forme /{w}
               </button>
             ))}
           </div>
-        </Field>
-      </div>
-
-      {hasInput && (
-        <div style={{ background: C.surface2, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 4 }}>
-          <div style={{ fontSize: 10, color: C.faint, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 2 }}>Détail du calcul</div>
-          <FDRRow label="Niveau adversaire" weight={FDR_WEIGHTS.adversaire} note={r.v1} contribution={r.v1 * FDR_WEIGHTS.adversaire} />
-          <FDRRow label="Forme récente" weight={FDR_WEIGHTS.forme} note={r.v2} contribution={r.v2 * FDR_WEIGHTS.forme} />
-          <FDRRow label="Terrain" sub={FDR_VENUE_OPTIONS.find((o) => o.id === venueId)?.label} weight={FDR_WEIGHTS.terrain} note={r.v3} contribution={r.v3 * FDR_WEIGHTS.terrain} />
-          <FDRRow label="H2H" sub={FDR_H2H_OPTIONS.find((o) => o.id === h2hId)?.sub} weight={FDR_WEIGHTS.h2h} note={r.v4} contribution={r.v4 * FDR_WEIGHTS.h2h} />
-
-          <div style={{ marginTop: 12, display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: "14px 10px", borderRadius: 10, background: r.band.color + "18", border: `1px solid ${r.band.color}55` }}>
-            <div style={{ fontSize: 11, color: C.faint, letterSpacing: 0.3, textTransform: "uppercase" }}>Score FDR</div>
-            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 40, fontWeight: 800, color: r.band.color, lineHeight: 1 }}>{r.score.toFixed(2)}</div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: r.band.color }}>{r.band.emoji} {r.band.label}</div>
-          </div>
-
-          <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 10, fontSize: 10, color: C.faint, fontFamily: FONT_MONO }}>
-            {FDR_BANDS.map((b, i) => {
-              const min = i === 0 ? 1.0 : FDR_BANDS[i - 1].max;
-              const active = r.band === b;
-              return (
-                <div key={b.label} style={{ display: "flex", alignItems: "center", gap: 6, opacity: active ? 1 : 0.5, fontWeight: active ? 700 : 400 }}>
-                  <span>{b.emoji}</span>
-                  <span style={{ minWidth: 90 }}>{min.toFixed(1)} – {b.max === Infinity ? "5.0" : `<${b.max.toFixed(1)}`}</span>
-                  <span style={{ color: active ? b.color : C.faint }}>{b.label}</span>
-                </div>
-              );
-            })}
-          </div>
         </div>
-      )}
 
-      {!hasInput && (
-        <EmptyState title="Renseigne le match" text="PPM de l'adversaire et forme récente au minimum pour obtenir un score FDR." />
-      )}
-    </div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <Card name={teamAName} color={C.teamA} r={rA} missing={!inputsB} />
+          <Card name={teamBName} color={C.teamB} r={rB} missing={!inputsA} />
+        </div>
+
+        <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic" }}>
+          niveau + forme calculés depuis les buts déjà saisis (PPM saison et points sur les {formeWindow} derniers matchs) · H2H auto-détecté depuis la section confrontations directes ci-dessous · seul le lieu se choisit, propre à ce match précis
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -6016,7 +6036,6 @@ export default function App() {
 
   const tabs = [
     { id: "comparateur", label: "Comparateur", icon: Target },
-    { id: "fdr", label: "FDR", icon: Gauge },
     { id: "historique", label: "Historique", icon: ClipboardList },
     { id: "bilan", label: "Bilan", icon: BarChart3 },
   ];
@@ -6052,8 +6071,6 @@ export default function App() {
                   : lastSaved
                   ? `Sauvegardé à ${lastSaved.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}`
                   : "En attente de sauvegarde"
-                : tab === "fdr"
-                ? "Difficulté du match (FDR)"
                 : "Comparateur d'équipes · corners"}
             </div>
           </div>
@@ -6157,8 +6174,6 @@ export default function App() {
           </div>
         ) : tab === "comparateur" ? (
           <ComparateurTab teamA={teamA} setTeamA={setTeamA} teamB={teamB} setTeamB={setTeamB} lignes={lignes} setLignes={setLignes} individuels={individuels} setIndividuels={setIndividuels} h2h={h2h} setH2h={setH2h} onAddBet={addBet} />
-        ) : tab === "fdr" ? (
-          <FDRTab />
         ) : tab === "historique" ? (
           <HistoriqueTab bets={bets} setResult={setResult} removeBet={removeBet} addManualBet={addBet} updateCote={updateCote} />
         ) : (
