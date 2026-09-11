@@ -1523,13 +1523,16 @@ function computeButsStats(matches, alpha = 0.25) {
    (Forebet) ET soit des att. dangereuses soit des corners (TotalCorner) sur la même
    ligne — donc bien une même rencontre couverte par les deux sources. Le panneau
    n'affiche volontairement QUE buts, buts 1MT et att. dangereuses (pas les corners). */
-function computeCombinedSourceStats(matches, alpha = 0.25) {
-  const combined = matches.filter(
+function filterCombinedSourceMatches(matches) {
+  return matches.filter(
     (m) =>
       m.butsObtenus !== "" && m.butsObtenus !== undefined &&
       m.butsConcedes !== "" && m.butsConcedes !== undefined &&
       ((m.attDangObtenus !== "" && m.attDangObtenus !== undefined) || (m.obtenus !== "" && m.obtenus !== undefined))
   );
+}
+function computeCombinedSourceStats(matches, alpha = 0.25) {
+  const combined = filterCombinedSourceMatches(matches);
   if (!combined.length) return null;
   const buts = computeButsStats(combined, alpha);
   const attDangSeries = computeStatSeries(combined, "attDangObtenus", "attDangConcedes", alpha);
@@ -1547,9 +1550,16 @@ const emptyTeam = () => ({ nom: "", obtenus: "", concedes: "", part: "", ewma: "
    éléments UNE FOIS les compétitions exclues retirées — pas avant — pour que la limite
    porte sur les matchs réellement pertinents, pas sur un mélange qui inclurait des
    matchs d'une compétition que tu as justement décidé d'ignorer. */
-function applyMatchFilters(team) {
+/* Filtre compétition SEUL, sans la limite "N derniers" — sert de base commune aux 3
+   panneaux (TotalCorner / Forebet / Combiné) qui appliquent chacun leur PROPRE limite
+   de récence de façon indépendante (voir TeamProfileForm) plutôt qu'une limite partagée
+   qui mélangeait les deux sources. */
+function applyLeagueFilter(team) {
   const excludedLigues = team.excludedLigues || [];
-  let matches = excludedLigues.length ? team.matches.filter((m) => !excludedLigues.includes(m.ligue || "(non identifiée)")) : team.matches;
+  return excludedLigues.length ? team.matches.filter((m) => !excludedLigues.includes(m.ligue || "(non identifiée)")) : team.matches;
+}
+function applyMatchFilters(team) {
+  let matches = applyLeagueFilter(team);
   if (team.limitRecent) {
     const n = Math.max(1, Math.round(num(team.recentCount)) || 10);
     matches = matches.slice(0, n);
@@ -1892,8 +1902,8 @@ function parseTotalCornerBlock(raw, teamName) {
         corners1MTConcedes: "",
         corners2MTObtenus: "",
         corners2MTConcedes: "",
-        butsObtenus: butsHome !== null ? String(isHome ? butsHome : butsAway) : "",
-        butsConcedes: butsHome !== null ? String(isHome ? butsAway : butsHome) : "",
+        butsObtenus: "",
+        butsConcedes: "",
         ligue: resolveLigue(blockMarkerStarts[bi]),
         date: firstDate(block) === "date inconnue" ? "" : firstDate(block),
       };
@@ -2230,7 +2240,6 @@ function MatchHistoryRows({ matches, setMatches, color, teamName, useAdvanced, o
         <div style={{ display: "flex", gap: 6 }}>
           <RawExtractTotalCorner teamName={teamName} color={color} onImport={(parsed) => setMatches([...parsed, ...matches])} onTeamNameDetected={onTeamNameDetected} />
           <PdfExtractTotalCorner teamName={teamName} color={color} onImport={(parsed) => setMatches([...parsed, ...matches])} onTeamNameDetected={onTeamNameDetected} />
-          <PasteForebetTeamHistory matches={matches} setMatches={setMatches} teamName={teamName} />
           {matches.length > 1 && (
             <button
               onClick={() => setMatches([...matches].reverse())}
@@ -2421,6 +2430,52 @@ function VolBadge({ vol, volSource }) {
    + Over/Under + Clean sheet/Fail to score/BTTS, à partir d'un objet computeButsStats().
    Utilisé à la fois par le panneau "Forebet" (toutes les données buts saisies) et le
    panneau "Combiné" (uniquement les matchs recoupés par date avec TotalCorner). */
+/* Toggle "N derniers" compact et autonome — une instance par panneau (Forebet, Combiné),
+   totalement indépendante de celle de TotalCorner et des unes des autres. */
+function SourceRecentToggle({ color, active, count, onToggle, onChangeCount, total }) {
+  if (total <= 10) return null;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+      <button
+        onClick={onToggle}
+        title="Limite propre à ce panneau — n'affecte pas les autres sources"
+        style={{ fontSize: 10, color: active ? color : C.faint, background: active ? color + "18" : "transparent", border: `1px ${active ? "solid" : "dashed"} ${active ? color + "55" : C.line}`, borderRadius: 6, padding: "2px 6px", cursor: "pointer" }}
+      >
+        {active ? "✓ activé" : "+ activer"} limiter aux N derniers (indépendant)
+      </button>
+      {active && (
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <NumInput value={count} onChange={onChangeCount} placeholder="10" accent={color} />
+          <span style={{ fontSize: 10, color: C.faint }}>matchs (sur {total} dispo.)</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* Liste de vérification compacte — sert à voir concrètement QUELS matchs sont comptés
+   dans un panneau donné (date, lieu, score), pour pouvoir vérifier que TotalCorner
+   n'interfère pas avec Forebet et inversement. Lecture seule, l'édition reste dans
+   "Historique des matchs". */
+function SourceMatchList({ matches, showAttDang }) {
+  if (!matches.length) return null;
+  return (
+    <div style={{ maxHeight: 160, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3, border: `1px solid ${C.line}`, borderRadius: 8, padding: 6 }}>
+      {matches.map((m) => (
+        <div key={m.id} style={{ display: "flex", gap: 8, fontSize: 10, fontFamily: FONT_MONO, color: C.dim }}>
+          <span style={{ color: C.faint, minWidth: 42 }}>{m.date || "—"}</span>
+          <span style={{ color: C.faint, width: 12, flexShrink: 0 }}>{m.lieu || "?"}</span>
+          <span>{m.butsObtenus}-{m.butsConcedes}</span>
+          {showAttDang && m.attDangObtenus !== "" && m.attDangObtenus !== undefined && (
+            <span style={{ color: C.faint }}>att. {m.attDangObtenus}/{m.attDangConcedes}</span>
+          )}
+          {m.ligue && <span style={{ color: C.faint, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.ligue}</span>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ButsStatsBlock({ b, teamName }) {
   if (!b) return null;
   return (
@@ -2503,18 +2558,39 @@ function TeamProfileForm({ team, setTeam, color, label }) {
   // filtre compétition : appliqué UNIQUEMENT au calcul, la liste des matchs reste
   // visible/éditable en entier quel que soit le filtre choisi
   const excludedLigues = team.excludedLigues || [];
+  const leagueMatches = applyLeagueFilter(team);
+  // TotalCorner garde SA PROPRE limite "N derniers" (celle déjà présente dans le panneau
+  // "Historique des matchs", pilotée par team.limitRecent/recentCount)
   const filteredMatches = applyMatchFilters(team);
+  // Forebet et Combiné ont chacun LEUR PROPRE limite "N derniers", totalement
+  // indépendante de celle de TotalCorner — avant, une seule limite partagée s'appliquait
+  // à la liste mélangée AVANT le tri par source, ce qui pouvait tronquer les buts (Forebet)
+  // à cause d'une limite pensée pour les corners (TotalCorner), et inversement
+  const [butsLimitRecent, setButsLimitRecent] = useState(false);
+  const [butsRecentCount, setButsRecentCount] = useState(10);
+  const [combinedLimitRecent, setCombinedLimitRecent] = useState(false);
+  const [combinedRecentCount, setCombinedRecentCount] = useState(10);
   const [fdrFormeWindow, setFdrFormeWindow] = useState(5);
   const toggleLigue = (name) =>
     setTeam({ ...team, excludedLigues: excludedLigues.includes(name) ? excludedLigues.filter((l) => l !== name) : [...excludedLigues, name] });
   const stats = computeHistoryStats(filteredMatches, 0.25, !!team.useAdvanced);
-  const fdrInputs = computeTeamFDRInputs(filteredMatches, fdrFormeWindow);
+  // le FDR (PPM saison) doit rester sur TOUT l'historique de buts dispo (pas de limite
+  // "N derniers" — celle-ci ne concerne que les visuels corners), pour ne pas fausser une
+  // moyenne censée représenter la saison en cours
+  const fdrInputs = computeTeamFDRInputs(leagueMatches, fdrFormeWindow);
   // trois visuels pliables/dépliables séparés par source de données : TotalCorner
   // (corners), Forebet (buts, indépendant des corners) et Combiné (matchs recoupés PAR
   // DATE entre les deux sources — buts + buts 1MT + att. dangereuses uniquement, pas de
-  // corners) — voir computeButsStats / computeCombinedSourceStats.
-  const butsStats = computeButsStats(filteredMatches, 0.25);
-  const combinedStats = computeCombinedSourceStats(filteredMatches, 0.25);
+  // corners) — voir computeButsStats / computeCombinedSourceStats. Depuis que l'extraction
+  // TotalCorner ne remplit plus jamais les champs buts, seuls les matchs réellement
+  // importés depuis Forebet ont des buts — plus aucun risque que TotalCorner seul
+  // "contamine" les panneaux Forebet/Combiné.
+  const butsBaseMatches = leagueMatches.filter((m) => m.butsObtenus !== "" && m.butsObtenus !== undefined && m.butsConcedes !== "" && m.butsConcedes !== undefined);
+  const butsScopedMatches = butsLimitRecent ? butsBaseMatches.slice(0, Math.max(1, Math.round(num(butsRecentCount)) || 10)) : butsBaseMatches;
+  const butsStats = computeButsStats(butsScopedMatches, 0.25);
+  const combinedBaseMatches = filterCombinedSourceMatches(leagueMatches);
+  const combinedScopedMatches = combinedLimitRecent ? combinedBaseMatches.slice(0, Math.max(1, Math.round(num(combinedRecentCount)) || 10)) : combinedBaseMatches;
+  const combinedStats = computeCombinedSourceStats(combinedScopedMatches, 0.25);
   const useHistory = team.mode === "historique";
 
   return (
@@ -2586,7 +2662,7 @@ function TeamProfileForm({ team, setTeam, color, label }) {
               onChangeRecentCount={(v) => setTeam({ ...team, recentCount: v })}
             />
           </Collapsible>
-          {(stats || butsStats || combinedStats || fdrInputs) ? (
+          {(stats || butsStats || combinedStats || fdrInputs || team.matches.length === 0) ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {stats && (
                 <Collapsible title="📊 TotalCorners" badge={`${stats.n} match${stats.n > 1 ? "s" : ""}`} color={color}>
@@ -2761,19 +2837,49 @@ function TeamProfileForm({ team, setTeam, color, label }) {
                 </Collapsible>
               )}
 
-              {butsStats && (
-                <Collapsible title="🥅 Forebet (buts & mi-temps)" badge={`${butsStats.n} match${butsStats.n > 1 ? "s" : ""}`} color={color}>
-                  <ButsStatsBlock b={butsStats} teamName={team.nom} />
-                </Collapsible>
-              )}
+              <Collapsible title="🥅 Forebet (buts & mi-temps)" badge={butsBaseMatches.length ? `${butsBaseMatches.length} match${butsBaseMatches.length > 1 ? "s" : ""}` : "aucune donnée"} color={color}>
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <PasteForebetTeamHistory matches={team.matches} setMatches={setMatches} teamName={team.nom} />
+                </div>
+                {butsBaseMatches.length > 0 ? (
+                  <>
+                    <SourceRecentToggle
+                      color={color}
+                      active={butsLimitRecent}
+                      count={butsRecentCount}
+                      total={butsBaseMatches.length}
+                      onToggle={() => setButsLimitRecent((v) => !v)}
+                      onChangeCount={setButsRecentCount}
+                    />
+                    <div style={{ fontSize: 9.5, color: C.faint }}>
+                      matchs comptés dans ce panneau (vérifie qu'aucune ligne ne vient d'un import TotalCorner seul) :
+                    </div>
+                    <SourceMatchList matches={butsScopedMatches} />
+                    {butsStats && <ButsStatsBlock b={butsStats} teamName={team.nom} />}
+                  </>
+                ) : (
+                  <div style={{ fontSize: 10.5, color: C.faint }}>
+                    Aucune donnée Forebet importée pour l'instant — colle l'historique Forebet ci-dessus pour remplir ce panneau (les corners TotalCorner n'y apparaîtront jamais).
+                  </div>
+                )}
+              </Collapsible>
 
-              {combinedStats && (
-                <Collapsible title="🔗 Combiné (dates recoupées)" badge={`${combinedStats.n} match${combinedStats.n > 1 ? "s" : ""}`} color={color}>
+              {combinedBaseMatches.length > 0 && (
+                <Collapsible title="🔗 Combiné (dates recoupées)" badge={`${combinedBaseMatches.length} match${combinedBaseMatches.length > 1 ? "s" : ""}`} color={color}>
                   <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic", marginBottom: 2 }}>
                     matchs où TotalCorner ET Forebet couvrent la même date — buts, mi-temps et attaques dangereuses uniquement (corners exclus)
                   </div>
-                  <ButsStatsBlock b={combinedStats.buts} teamName={team.nom} />
-                  {combinedStats.attDangSeries && (
+                  <SourceRecentToggle
+                    color={color}
+                    active={combinedLimitRecent}
+                    count={combinedRecentCount}
+                    total={combinedBaseMatches.length}
+                    onToggle={() => setCombinedLimitRecent((v) => !v)}
+                    onChangeCount={setCombinedRecentCount}
+                  />
+                  <SourceMatchList matches={combinedScopedMatches} showAttDang />
+                  {combinedStats && <ButsStatsBlock b={combinedStats.buts} teamName={team.nom} />}
+                  {combinedStats && combinedStats.attDangSeries && (
                     <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 2, paddingTop: 5 }}>
                       <div style={{ fontSize: 10, color: C.faint, marginBottom: 2 }}>attaques dangereuses (optionnel) · tous lieux confondus</div>
                       <div>
@@ -4457,8 +4563,12 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
   // même filtre compétition que dans le profil solo — appliqué ici aussi pour que le
   // duel reste cohérent avec ce que l'utilisateur a choisi de regarder par équipe
   const filterMatches = (team) => ({ ...team, matches: applyMatchFilters(team) });
-  const matchesAFiltered = filterMatches(teamA).matches;
-  const matchesBFiltered = filterMatches(teamB).matches;
+  // le FDR (PPM saison + H2H) ne doit PAS subir la limite "N derniers" (qui ne concerne
+  // que les visuels corners) — seul le filtre compétition s'applique, sinon un "N
+  // derniers" réglé pour les corners tronquerait aussi l'historique de buts utilisé pour
+  // le PPM saison du FDR, indépendamment de ce qu'affichent les panneaux corners
+  const matchesAFiltered = applyLeagueFilter(teamA);
+  const matchesBFiltered = applyLeagueFilter(teamB);
   const effA = pickVenueStats(filterMatches(teamA), "D");
   const effB = pickVenueStats(filterMatches(teamB), "E");
   // stats tous lieux confondus (pas de filtre domicile/extérieur) — pour le panneau
@@ -5683,13 +5793,14 @@ function computeTeamFDRInputs(matches, formeWindow = 5) {
 
 /* Auto-détection du barème H2H à partir des confrontations directes déjà saisies dans
    le Comparateur (section H2H) — plus de sélection manuelle. perspective "A" : on
-   regarde si l'ADVERSAIRE DE A (= équipe B) a gagné les 3 dernières confrontations, etc.
-   Sous 2 confrontations valides, retombe sur "neutre" (pas assez d'historique pour
-   trancher). */
+   regarde si l'ADVERSAIRE DE A (= équipe B) a gagné TOUTES les confrontations valides
+   récentes (jusqu'à 3), etc. Dès 1 confrontation valide saisie, un balayage net donne un
+   signal (avant il fallait au moins 2 saisies, ce qui bloquait sur "neutre" par défaut
+   si l'utilisateur n'avait rentré qu'un seul match direct). */
 function computeH2hFDRId(h2h, perspective = "A") {
   const valid = (h2h || []).filter((m) => m.butsA !== "" && m.butsA !== undefined && m.butsB !== "" && m.butsB !== undefined);
   const recent = valid.slice(0, 3);
-  if (recent.length < 2) return "neutre";
+  if (recent.length < 1) return "neutre";
   const winsA = recent.filter((m) => num(m.butsA) > num(m.butsB)).length;
   const winsB = recent.filter((m) => num(m.butsB) > num(m.butsA)).length;
   const winsAdv = perspective === "A" ? winsB : winsA;
@@ -5697,6 +5808,49 @@ function computeH2hFDRId(h2h, perspective = "A") {
   if (winsAdv === recent.length) return "adversaire";
   if (winsUs === recent.length) return "nous";
   return "neutre";
+}
+function countValidH2h(h2h) {
+  return (h2h || []).filter((m) => m.butsA !== "" && m.butsA !== undefined && m.butsB !== "" && m.butsB !== undefined).length;
+}
+
+/* Petite barre 1.0→5.0 (même dégradé que les paliers) avec un repère par équipe pour
+   voir d'un coup d'œil où chacune se situe l'une par rapport à l'autre — équipe A
+   toujours au-dessus de la barre, équipe B toujours en-dessous, pour ne jamais se
+   chevaucher même quand les deux scores sont proches. */
+function FdrGaugeBar({ teamAName, teamAScore, teamAColor, teamBName, teamBScore, teamBColor }) {
+  const pct = (score) => Math.max(3, Math.min(97, ((score - 1.0) / 4.0) * 100));
+  const tri = (color, dir) => ({
+    width: 0, height: 0,
+    borderLeft: "5px solid transparent", borderRight: "5px solid transparent",
+    [dir === "down" ? "borderTop" : "borderBottom"]: `7px solid ${color}`,
+  });
+  return (
+    <div style={{ padding: "20px 4px 22px" }}>
+      <div style={{ position: "relative" }}>
+        {teamAScore !== null && teamAScore !== undefined && (
+          <div style={{ position: "absolute", left: `${pct(teamAScore)}%`, bottom: "100%", transform: "translateX(-50%)", display: "flex", flexDirection: "column", alignItems: "center", marginBottom: 2 }}>
+            <span style={{ fontSize: 9, fontWeight: 700, color: teamAColor, whiteSpace: "nowrap" }}>{teamAName || "A"} {teamAScore.toFixed(2)}</span>
+            <span style={tri(teamAColor, "down")} />
+          </div>
+        )}
+        <div style={{ height: 10, borderRadius: 6, overflow: "hidden", display: "flex" }}>
+          {FDR_BANDS.map((b) => (
+            <div key={b.label} style={{ flex: 1, background: b.color }} />
+          ))}
+        </div>
+        {teamBScore !== null && teamBScore !== undefined && (
+          <div style={{ position: "absolute", left: `${pct(teamBScore)}%`, top: "100%", transform: "translateX(-50%)", display: "flex", flexDirection: "column-reverse", alignItems: "center", marginTop: 2 }}>
+            <span style={{ fontSize: 9, fontWeight: 700, color: teamBColor, whiteSpace: "nowrap" }}>{teamBName || "B"} {teamBScore.toFixed(2)}</span>
+            <span style={tri(teamBColor, "up")} />
+          </div>
+        )}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: C.faint, marginTop: 4 }}>
+        <span>1.0 facile</span>
+        <span>5.0 grave</span>
+      </div>
+    </div>
+  );
 }
 
 /* Section FDR complète pour le duel — 100% auto (PPM + forme calculés depuis les buts
@@ -5716,13 +5870,20 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h }) {
   const venueForB = venue === "B" ? "D" : venue === "A" ? "E" : "N";
   const h2hForA = computeH2hFDRId(h2h, "A");
   const h2hForB = computeH2hFDRId(h2h, "B");
+  const h2hCount = countValidH2h(h2h);
+  // "neutre" a 2 causes bien distinctes : pas de confrontation directe saisie du tout
+  // pour ce duel, ou un historique saisi mais équilibré (pas de balayage 3-0 net)
+  const h2hSub = (id) => {
+    if (id === "neutre" && h2hCount === 0) return "Aucune confrontation directe saisie pour ce duel";
+    return FDR_H2H_OPTIONS.find((o) => o.id === id)?.sub;
+  };
 
   const rA = inputsB ? computeFDR({ ppm: inputsB.ppm, forme: inputsB.formePoints, formeWindow, venueId: venueForA, h2hId: h2hForA }) : null;
   const rB = inputsA ? computeFDR({ ppm: inputsA.ppm, forme: inputsA.formePoints, formeWindow, venueId: venueForB, h2hId: h2hForB }) : null;
 
   const Card = ({ name, color, r, missing }) => (
     <div style={{ flex: 1, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 10, padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-      <div style={{ fontSize: 10.5, color, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3 }}>{name || "Équipe"}</div>
+      <div style={{ fontSize: 10.5, color, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3 }}>Difficulté pour {name || "l'équipe"}</div>
       {missing ? (
         <div style={{ fontSize: 10.5, color: C.faint }}>Pas de buts saisis (Forebet) pour cette équipe.</div>
       ) : (
@@ -5734,7 +5895,7 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h }) {
           <FDRRow label="Niveau adversaire" weight={FDR_WEIGHTS.adversaire} note={r.v1} contribution={r.v1 * FDR_WEIGHTS.adversaire} />
           <FDRRow label="Forme adversaire" weight={FDR_WEIGHTS.forme} note={r.v2} contribution={r.v2 * FDR_WEIGHTS.forme} />
           <FDRRow label="Terrain" sub={FDR_VENUE_OPTIONS.find((o) => o.id === (color === C.teamA ? venueForA : venueForB))?.label} weight={FDR_WEIGHTS.terrain} note={r.v3} contribution={r.v3 * FDR_WEIGHTS.terrain} />
-          <FDRRow label="H2H" sub={FDR_H2H_OPTIONS.find((o) => o.id === (color === C.teamA ? h2hForA : h2hForB))?.sub} weight={FDR_WEIGHTS.h2h} note={r.v4} contribution={r.v4 * FDR_WEIGHTS.h2h} />
+          <FDRRow label="H2H" sub={h2hSub(color === C.teamA ? h2hForA : h2hForB)} weight={FDR_WEIGHTS.h2h} note={r.v4} contribution={r.v4 * FDR_WEIGHTS.h2h} />
         </>
       )}
     </div>
@@ -5772,6 +5933,10 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h }) {
             ))}
           </div>
         </div>
+
+        {rA && rB && (
+          <FdrGaugeBar teamAName={teamAName} teamAScore={rA.score} teamAColor={C.teamA} teamBName={teamBName} teamBScore={rB.score} teamBColor={C.teamB} />
+        )}
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <Card name={teamAName} color={C.teamA} r={rA} missing={!inputsB} />
