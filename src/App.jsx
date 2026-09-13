@@ -2319,7 +2319,9 @@ function MatchHistoryRows({ matches, setMatches, color, teamName, useAdvanced, o
           </div>
         </div>
       )}
-      {matches.map((m, i) => (
+      {matches
+        .filter((m) => !(m.forebetTouched === true && (m.obtenus === "" || m.obtenus === undefined)))
+        .map((m, i) => (
         <div key={m.id} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
             <span style={{ fontSize: 10, color: C.faint, width: 13, fontFamily: FONT_MONO, flexShrink: 0 }}>{i + 1}</span>
@@ -2653,6 +2655,13 @@ function TeamProfileForm({ team, setTeam, color, label }) {
   // score embarqué dans le PDF TotalCorner (autres saisons potentiellement) — seules les
   // lignes réellement confirmées par un import Forebet comptent ici
   const butsBaseMatches = leagueMatches.filter((m) => m.forebetTouched === true && m.butsObtenus !== "" && m.butsObtenus !== undefined && m.butsConcedes !== "" && m.butsConcedes !== undefined);
+  // liste d'ÉDITION du panneau Forebet : tous les matchs déjà touchés par Forebet, MÊME
+  // si les champs buts sont encore vides (ex. ligne tout juste créée par "+ Ajouter un
+  // match Forebet") — sinon la ligne neuve, avec ses champs vides, ne matchait pas le
+  // filtre ci-dessus et restait invisible dans Forebet ; elle n'apparaissait alors QUE
+  // dans "Historique des matchs" (qui montre tout sans filtre), d'où l'impression que la
+  // ligne "s'ouvrait dans TotalCorner" au lieu de Forebet
+  const butsEditableMatches = leagueMatches.filter((m) => m.forebetTouched === true);
   const butsScopedMatches = butsLimitRecent ? butsBaseMatches.slice(0, Math.max(1, Math.round(num(butsRecentCount)) || 10)) : butsBaseMatches;
   const butsStats = computeButsStats(butsScopedMatches, 0.25);
   const combinedBaseMatches = filterCombinedSourceMatches(leagueMatches);
@@ -2710,7 +2719,7 @@ function TeamProfileForm({ team, setTeam, color, label }) {
         <>
           <Collapsible
             title="📋 Historique des matchs"
-            badge={`${team.matches.length} match${team.matches.length > 1 ? "s" : ""}`}
+            badge={`${team.matches.filter((m) => !(m.forebetTouched === true && (m.obtenus === "" || m.obtenus === undefined))).length} match${team.matches.length > 1 ? "s" : ""}`}
             color={color}
           >
             <MatchHistoryRows
@@ -2921,7 +2930,7 @@ function TeamProfileForm({ team, setTeam, color, label }) {
                 <div style={{ fontSize: 9.5, color: C.faint }}>
                   voir / modifier / ajouter les matchs Forebet ici (vérifie qu'aucune ligne ne vient d'un import TotalCorner seul) :
                 </div>
-                <ForebetMatchRows matches={butsScopedMatches} allMatches={team.matches} setAllMatches={setMatches} color={color} />
+                <ForebetMatchRows matches={butsEditableMatches} allMatches={team.matches} setAllMatches={setMatches} color={color} />
                 {butsStats && <ButsStatsBlock b={butsStats} teamName={team.nom} />}
               </Collapsible>
 
@@ -5871,7 +5880,12 @@ function computeTeamFDRInputs(matches, formeWindow = 5) {
   const vndRecent = computeVND(recent, "butsObtenus", "butsConcedes");
   const formePoints = vndRecent ? vndRecent.vic * 3 + vndRecent.nul : null;
   const formeN = vndRecent ? vndRecent.n : 0;
-  return { ppm, n: vndSeason.n, formePoints, formeN, formeWindow };
+  // attaque/défense séparées (moyenne buts marqués / encaissés, saison) — utile pour
+  // BTTS et Over/Under, qui ont besoin de savoir séparément si une équipe marque
+  // beaucoup ET si elle encaisse beaucoup, pas juste "elle est forte" (PPM global) : une
+  // équipe peut être solide au classement en étant peu prolifique, et inversement
+  const butsSeries = computeStatSeries(butsMatches, "butsObtenus", "butsConcedes", 0.25);
+  return { ppm, n: vndSeason.n, formePoints, formeN, formeWindow, attaque: butsSeries.moyObtenus, defense: butsSeries.moyConcedes };
 }
 
 /* Auto-détection du barème H2H à partir des confrontations directes déjà saisies dans
@@ -6026,6 +6040,61 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h }) {
           <Card name={teamAName} color={C.teamA} r={rA} missing={!inputsB} />
           <Card name={teamBName} color={C.teamB} r={rB} missing={!inputsA} />
         </div>
+
+        {inputsA && inputsB && (
+          <div style={{ borderTop: `1px solid ${C.line}`, paddingTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ fontSize: 10, color: C.faint, textTransform: "uppercase", letterSpacing: 0.4 }}>
+              Attaque / défense séparées — pour BTTS et Over/Under (le score FDR ci-dessus reste pensé pour le 1X2)
+            </div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ flex: 1, minWidth: 140 }}>
+                <div style={{ fontSize: 10.5, color: C.teamA, fontWeight: 700 }}>{teamAName || "A"}</div>
+                <div style={{ fontSize: 11, color: C.dim }}>
+                  attaque <b style={{ color: C.text }}>{inputsA.attaque.toFixed(2)}</b> buts/match · défense{" "}
+                  <b style={{ color: C.text }}>{inputsA.defense.toFixed(2)}</b> encaissés/match
+                </div>
+              </div>
+              <div style={{ flex: 1, minWidth: 140 }}>
+                <div style={{ fontSize: 10.5, color: C.teamB, fontWeight: 700 }}>{teamBName || "B"}</div>
+                <div style={{ fontSize: 11, color: C.dim }}>
+                  attaque <b style={{ color: C.text }}>{inputsB.attaque.toFixed(2)}</b> buts/match · défense{" "}
+                  <b style={{ color: C.text }}>{inputsB.defense.toFixed(2)}</b> encaissés/match
+                </div>
+              </div>
+            </div>
+            {(() => {
+              // projection simple : ce qu'une équipe devrait marquer = moyenne de sa
+              // propre attaque et de la défense adverse — pas un modèle de probabilité
+              // complet (pas de Poisson, pas d'ajustement terrain/forme), juste un repère
+              // rapide pour BTTS/Over-Under à partir des mêmes buts saisis que le reste du FDR
+              const xA = (inputsA.attaque + inputsB.defense) / 2;
+              const xB = (inputsB.attaque + inputsA.defense) / 2;
+              const total = xA + xB;
+              const diff = total - 2.5;
+              const ouLabel = diff > 0.3 ? "Over 2.5 probable" : diff < -0.3 ? "Under 2.5 probable" : "Équilibré autour de 2.5";
+              const ouColor = diff > 0.3 ? C.solide : diff < -0.3 ? C.fragile : C.jouable;
+              const bttsLikely = xA >= 1.0 && xB >= 1.0;
+              const bttsUnlikely = xA < 0.75 || xB < 0.75;
+              const bttsLabel = bttsLikely ? "BTTS probable" : bttsUnlikely ? "BTTS peu probable" : "BTTS incertain";
+              const bttsColor = bttsLikely ? C.solide : bttsUnlikely ? C.fragile : C.jouable;
+              return (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <div style={{ fontSize: 11, color: C.dim }}>
+                    buts projetés : <b style={{ color: C.teamA }}>{xA.toFixed(2)}</b> ({teamAName || "A"}) +{" "}
+                    <b style={{ color: C.teamB }}>{xB.toFixed(2)}</b> ({teamBName || "B"}) = <b style={{ color: C.text }}>{total.toFixed(2)}</b> au total
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <Pill color={ouColor}>{ouLabel}</Pill>
+                    <Pill color={bttsColor}>{bttsLabel}</Pill>
+                  </div>
+                  <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic" }}>
+                    projection simple (attaque d'une équipe croisée avec la défense de l'autre, moyenne saison) — pas un modèle de probabilité complet, à prendre comme repère
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        )}
 
         <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic" }}>
           niveau + forme calculés depuis les buts déjà saisis (PPM saison et points sur les {formeWindow} derniers matchs) · H2H auto-détecté depuis la section confrontations directes ci-dessous · seul le lieu se choisit, propre à ce match précis
