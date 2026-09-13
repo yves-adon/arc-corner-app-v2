@@ -3946,6 +3946,15 @@ function teamKeywords(name) {
     .split(/\s+/)
     .filter((w) => w.length >= 3 && !GENERIC_CLUB_WORDS.has(w));
 }
+/* Un mot ne compte comme signe d'appartenance à UNE zone (ex. "avant le score" = équipe
+   à domicile) que s'il apparaît dans cette zone ET PAS dans l'autre — sinon deux clubs
+   partageant un mot commun (ex. "Wisla" pour Wisła Kraków ET Wisła Płock, ou "Real" pour
+   plusieurs clubs homonymes) rendent ce mot ambigu pour les DEUX zones à la fois, et la
+   ligne entière était rejetée par excès de prudence alors que l'autre mot du nom (ex.
+   "Plock") suffisait à trancher sans ambiguïté. */
+function wordsMatchZone(words, zoneOwn, zoneOther) {
+  return words.some((w) => zoneOwn.includes(w) && !zoneOther.includes(w));
+}
 
 function parsePhotoH2hRows(rowTexts, teamAName, teamBName) {
   const aWords = teamKeywords(teamAName);
@@ -3967,10 +3976,10 @@ function parsePhotoH2hRows(rowTexts, teamAName, teamBName) {
     const leftGoals = scoreMatch[1];
     const rightGoals = scoreMatch[2];
 
-    const aLeft = aWords.some((w) => before.includes(w));
-    const bLeft = bWords.some((w) => before.includes(w));
-    const aRight = aWords.some((w) => after.includes(w));
-    const bRight = bWords.some((w) => after.includes(w));
+    const aLeft = wordsMatchZone(aWords, before, after);
+    const bLeft = wordsMatchZone(bWords, before, after);
+    const aRight = wordsMatchZone(aWords, after, before);
+    const bRight = wordsMatchZone(bWords, after, before);
 
     let butsA = null, butsB = null, buts1MTA = "", buts1MTB = "";
     if (aLeft && bRight) {
@@ -4068,8 +4077,8 @@ function parseForebetTeamHistory(text, teamName) {
     const leftGoals = scoreMatch[1];
     const rightGoals = scoreMatch[2];
 
-    const teamLeft = teamWords.some((w) => before.includes(w));
-    const teamRight = teamWords.some((w) => after.includes(w));
+    const teamLeft = wordsMatchZone(teamWords, before, after);
+    const teamRight = wordsMatchZone(teamWords, after, before);
 
     let butsObtenus = null, butsConcedes = null, buts1MTObtenus = "", buts1MTConcedes = "", lieu = "";
     if (teamLeft && !teamRight) {
