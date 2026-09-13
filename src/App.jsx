@@ -1706,7 +1706,7 @@ function parseRawH2hBlock(text, teamAName, teamBName) {
       page — conservé ici uniquement en repli, si jamais aucune mi-temps inline n'est
       trouvée pour un match donné. */
 function parseTotalCornerBlock(raw, teamName) {
-  const target = (teamName || "").trim().toLowerCase();
+  const target = stripAccents(teamName).trim().toLowerCase();
   // mots significatifs du nom (>=3 caractères) — si le site abrège/complète le nom
   // différemment de ce que tu as tapé, on accepte une correspondance sur un seul mot
   // clé plutôt que d'exiger le nom entier en substring exacte
@@ -1813,8 +1813,8 @@ function parseTotalCornerBlock(raw, teamName) {
     if (idMatches.length < 2) return;
     const [m1, m2] = idMatches;
 
-    const zoneHome = block.slice(0, m1.index).toLowerCase().replace(/\s+/g, " ");
-    const zoneAway = block.slice(m1.index + m1[0].length, m2.index).toLowerCase().replace(/\s+/g, " ");
+    const zoneHome = stripAccents(block.slice(0, m1.index)).toLowerCase().replace(/\s+/g, " ");
+    const zoneAway = stripAccents(block.slice(m1.index + m1[0].length, m2.index)).toLowerCase().replace(/\s+/g, " ");
 
     // score final (buts) — apparaît toujours juste entre les deux liens d'équipe, avant
     // le nom de l'équipe extérieure, ex. "...Manta FC (/fr/team/view/2773) 0 - 0
@@ -2453,10 +2453,73 @@ function SourceRecentToggle({ color, active, count, onToggle, onChangeCount, tot
   );
 }
 
-/* Liste de vérification compacte — sert à voir concrètement QUELS matchs sont comptés
-   dans un panneau donné (date, lieu, score), pour pouvoir vérifier que TotalCorner
-   n'interfère pas avec Forebet et inversement. Lecture seule, l'édition reste dans
-   "Historique des matchs". */
+/* Liste ÉDITABLE des matchs Forebet — voir/modifier/supprimer/ajouter directement dans
+   ce panneau, comme pour TotalCorner dans "Historique des matchs". `matches` est le
+   sous-ensemble affiché (déjà filtré + limité par la récence propre à ce panneau),
+   `allMatches`/`setAllMatches` portent sur la liste COMPLÈTE de l'équipe (nécessaire pour
+   retrouver/mettre à jour la bonne ligne par id, y compris les lignes TotalCorner qui ne
+   sont pas affichées ici). "Ajouter un match" crée une ligne 100% Forebet (aucun champ
+   corners) — elle n'apparaîtra donc jamais dans le panneau TotalCorner ni Combiné tant
+   qu'aucune donnée corners n'y est ajoutée séparément via "Historique des matchs". */
+function ForebetMatchRows({ matches, allMatches, setAllMatches, color }) {
+  const update = (id, next) => setAllMatches(allMatches.map((m) => (m.id === id ? next : m)));
+  const remove = (id) => setAllMatches(allMatches.filter((m) => m.id !== id));
+  const addNew = () =>
+    setAllMatches([
+      { id: uid(), obtenus: "", concedes: "", lieu: "", tirsObtenus: "", tirsConcedes: "", attDangObtenus: "", attDangConcedes: "", corners1MTObtenus: "", corners1MTConcedes: "", corners2MTObtenus: "", corners2MTConcedes: "", butsObtenus: "", butsConcedes: "", buts1MTObtenus: "", buts1MTConcedes: "", xGObtenus: "", xGConcedes: "", ligue: "", date: "" },
+      ...allMatches,
+    ]);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <button
+        onClick={addNew}
+        style={{ alignSelf: "flex-start", fontSize: 10, color, background: color + "18", border: `1px solid ${color}55`, borderRadius: 6, padding: "3px 8px", cursor: "pointer" }}
+      >
+        + Ajouter un match Forebet
+      </button>
+      {matches.length === 0 && (
+        <div style={{ fontSize: 10, color: C.faint, fontStyle: "italic" }}>Aucun match Forebet pour l'instant.</div>
+      )}
+      <div style={{ maxHeight: 320, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+        {matches.map((m) => (
+          <div key={m.id} style={{ display: "flex", flexDirection: "column", gap: 3, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 8, padding: 6 }}>
+            <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+              <input
+                type="text"
+                value={m.date || ""}
+                onChange={(e) => update(m.id, { ...m, date: e.target.value })}
+                placeholder="date"
+                style={{ width: 52, flexShrink: 0, background: C.surface2, border: `1px solid ${C.line}`, borderRadius: 6, padding: "0 6px", height: 28, color: m.date ? C.text : C.faint, fontFamily: FONT_MONO, fontSize: 10, outline: "none" }}
+              />
+              <div style={{ display: "flex", flexShrink: 0, borderRadius: 6, overflow: "hidden", border: `1px solid ${C.line}` }}>
+                {["D", "E"].map((v) => (
+                  <button
+                    key={v}
+                    onClick={() => update(m.id, { ...m, lieu: m.lieu === v ? "" : v })}
+                    style={{ width: 20, height: 28, fontSize: 10.5, fontWeight: 700, border: "none", background: m.lieu === v ? color + "33" : C.surface2, color: m.lieu === v ? color : C.faint, cursor: "pointer" }}
+                  >
+                    {v}
+                  </button>
+                ))}
+              </div>
+              <NumInput value={m.butsObtenus} onChange={(v) => update(m.id, { ...m, butsObtenus: v })} placeholder="buts obt." accent={color} />
+              <NumInput value={m.butsConcedes} onChange={(v) => update(m.id, { ...m, butsConcedes: v })} placeholder="buts conc." accent={color} />
+              <IconBtn onClick={() => remove(m.id)} color={C.faint} title="Supprimer"><Trash2 size={13} /></IconBtn>
+            </div>
+            <div style={{ display: "flex", gap: 5, alignItems: "center", paddingLeft: 57 }}>
+              <NumInput value={m.buts1MTObtenus} onChange={(v) => update(m.id, { ...m, buts1MTObtenus: v })} placeholder="buts 1MT obt." accent={C.faint} />
+              <NumInput value={m.buts1MTConcedes} onChange={(v) => update(m.id, { ...m, buts1MTConcedes: v })} placeholder="buts 1MT conc." accent={C.faint} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* Liste de vérification compacte, LECTURE SEULE — sert au panneau Combiné (les lignes y
+   viennent forcément d'un recoupement TotalCorner+Forebet déjà fait ailleurs, éditer un
+   champ ici casserait ce recoupement sans le montrer). */
 function SourceMatchList({ matches, showAttDang }) {
   if (!matches.length) return null;
   return (
@@ -2841,27 +2904,21 @@ function TeamProfileForm({ team, setTeam, color, label }) {
                 <div style={{ display: "flex", justifyContent: "flex-end" }}>
                   <PasteForebetTeamHistory matches={team.matches} setMatches={setMatches} teamName={team.nom} />
                 </div>
-                {butsBaseMatches.length > 0 ? (
-                  <>
-                    <SourceRecentToggle
-                      color={color}
-                      active={butsLimitRecent}
-                      count={butsRecentCount}
-                      total={butsBaseMatches.length}
-                      onToggle={() => setButsLimitRecent((v) => !v)}
-                      onChangeCount={setButsRecentCount}
-                    />
-                    <div style={{ fontSize: 9.5, color: C.faint }}>
-                      matchs comptés dans ce panneau (vérifie qu'aucune ligne ne vient d'un import TotalCorner seul) :
-                    </div>
-                    <SourceMatchList matches={butsScopedMatches} />
-                    {butsStats && <ButsStatsBlock b={butsStats} teamName={team.nom} />}
-                  </>
-                ) : (
-                  <div style={{ fontSize: 10.5, color: C.faint }}>
-                    Aucune donnée Forebet importée pour l'instant — colle l'historique Forebet ci-dessus pour remplir ce panneau (les corners TotalCorner n'y apparaîtront jamais).
-                  </div>
+                {butsBaseMatches.length > 10 && (
+                  <SourceRecentToggle
+                    color={color}
+                    active={butsLimitRecent}
+                    count={butsRecentCount}
+                    total={butsBaseMatches.length}
+                    onToggle={() => setButsLimitRecent((v) => !v)}
+                    onChangeCount={setButsRecentCount}
+                  />
                 )}
+                <div style={{ fontSize: 9.5, color: C.faint }}>
+                  voir / modifier / ajouter les matchs Forebet ici (vérifie qu'aucune ligne ne vient d'un import TotalCorner seul) :
+                </div>
+                <ForebetMatchRows matches={butsScopedMatches} allMatches={team.matches} setAllMatches={setMatches} color={color} />
+                {butsStats && <ButsStatsBlock b={butsStats} teamName={team.nom} />}
               </Collapsible>
 
               {combinedBaseMatches.length > 0 && (
@@ -3861,8 +3918,16 @@ function mergeContinuationRows(rowTexts) {
 // premier mot du nom complet. Mots ≥3 lettres, génériques ("fc", "city", "club"...) exclus
 // pour éviter les faux positifs quand une des deux équipes en contient un.
 const GENERIC_CLUB_WORDS = new Set(["fc", "cf", "sc", "ac", "afc", "cd", "ca", "cfc", "city", "club", "united", "utd", "real", "deportivo", "sporting", "atletico", "athletic", "olympique", "racing"]);
+/* Retire les accents/diacritiques (é→e, á→a, ñ→n...) — indispensable pour matcher un nom
+   d'équipe tapé SANS accent dans l'app (ex. "Coban Imperial") contre le même nom AVEC
+   accent dans un texte collé venant d'un site (ex. "Cobán Imperial" sur Forebet/SofaScore)
+   — sans ça, la comparaison de sous-chaîne échoue silencieusement et aucune ligne n'est
+   reconnue, même quand le format est par ailleurs correct. */
+function stripAccents(str) {
+  return (str || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
 function teamKeywords(name) {
-  return (name || "")
+  return stripAccents(name)
     .trim()
     .toLowerCase()
     .split(/\s+/)
@@ -3884,8 +3949,8 @@ function parsePhotoH2hRows(rowTexts, teamAName, teamBName) {
     const scoreMatch = withoutHalf.match(/(\d+)\s*-\s*(\d+)/);
     if (!scoreMatch || scoreMatch.index === undefined) continue; // pas une ligne de match (titre, légende...)
 
-    const before = withoutHalf.slice(0, scoreMatch.index).toLowerCase();
-    const after = withoutHalf.slice(scoreMatch.index + scoreMatch[0].length).toLowerCase();
+    const before = stripAccents(withoutHalf.slice(0, scoreMatch.index)).toLowerCase();
+    const after = stripAccents(withoutHalf.slice(scoreMatch.index + scoreMatch[0].length)).toLowerCase();
     const leftGoals = scoreMatch[1];
     const rightGoals = scoreMatch[2];
 
@@ -3985,8 +4050,8 @@ function parseForebetTeamHistory(text, teamName) {
       skipped.push(raw);
       continue;
     }
-    const before = withoutHalf.slice(0, scoreMatch.index).toLowerCase();
-    const after = withoutHalf.slice(scoreMatch.index + scoreMatch[0].length).toLowerCase();
+    const before = stripAccents(withoutHalf.slice(0, scoreMatch.index)).toLowerCase();
+    const after = stripAccents(withoutHalf.slice(scoreMatch.index + scoreMatch[0].length)).toLowerCase();
     const leftGoals = scoreMatch[1];
     const rightGoals = scoreMatch[2];
 
@@ -4297,7 +4362,7 @@ function H2hSection({ h2h, setH2h, teamAName, teamBName, seasonProj, limitRecent
     const aWords = teamKeywords(teamAName);
     const bWords = teamKeywords(teamBName);
     const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const lineHasAny = (line, words) => words.some((w) => new RegExp(`\\b${escapeRe(w)}`, "i").test(line));
+    const lineHasAny = (line, words) => words.some((w) => new RegExp(`\\b${escapeRe(w)}`, "i").test(stripAccents(line)));
 
     // Tableau "Head to head" multi-lignes (Forebet, SofaScore...) collé tel quel — testé
     // EN PREMIER : ce format a des lignes date seules ("09/03") qui, sinon, seraient
@@ -5738,11 +5803,12 @@ const FDR_VENUE_OPTIONS = [
   { id: "N", label: "Neutre", score: 3 },
   { id: "D", label: "Domicile", score: 2 },
 ];
-const FDR_H2H_OPTIONS = [
-  { id: "adversaire", label: "Adversaire a gagné les 3", sub: "Bête noire historique", score: 5 },
-  { id: "neutre", label: "Historique partagé / neutre", sub: "Aucun historique récent tranché", score: 3 },
-  { id: "nous", label: "Votre équipe a gagné les 3", sub: "Ascendant psychologique", score: 1 },
-];
+/* Barème H2H dégradé sur 5 niveaux, basé sur l'écart de victoires (pas seulement un
+   balayage net 3-0) — un strict "3-0 ou rien" ne se déclenche presque jamais en pratique
+   dès qu'il y a plus de 2-3 confrontations avec des résultats mêlés (victoires + nuls),
+   ce qui faisait retomber le H2H sur "neutre" quasi systématiquement malgré des données
+   saisies. Sur les 3 dernières confrontations valides (ou moins si l'historique est plus
+   court) : écart ≥+2 → 5, +1 → 4, 0 → 3 (équilibré), -1 → 2, ≤-2 → 1. */
 const FDR_BANDS = [
   { max: 1.8, label: "Très facile", emoji: "🟩", color: C.solide },
   { max: 2.6, label: "Abordable", emoji: "🟢", color: C.solide },
@@ -5753,11 +5819,11 @@ const FDR_BANDS = [
 function fdrBand(score) {
   return FDR_BANDS.find((b) => score < b.max) || FDR_BANDS[FDR_BANDS.length - 1];
 }
-function computeFDR({ ppm, forme, formeWindow = 5, venueId, h2hId }) {
+function computeFDR({ ppm, forme, formeWindow = 5, venueId, h2hScore }) {
   const v1 = fdrScoreAdversaire(ppm);
   const v2 = fdrScoreForme(forme, formeWindow);
   const v3 = (FDR_VENUE_OPTIONS.find((o) => o.id === venueId) || FDR_VENUE_OPTIONS[2]).score;
-  const v4 = (FDR_H2H_OPTIONS.find((o) => o.id === h2hId) || FDR_H2H_OPTIONS[1]).score;
+  const v4 = h2hScore ?? 3;
   const score = v1 * FDR_WEIGHTS.adversaire + v2 * FDR_WEIGHTS.forme + v3 * FDR_WEIGHTS.terrain + v4 * FDR_WEIGHTS.h2h;
   return { v1, v2, v3, v4, score, band: fdrBand(score) };
 }
@@ -5781,10 +5847,16 @@ function FDRRow({ label, sub, weight, note, contribution }) {
    contrairement à l'ancienne version. "forme récente" = points (3/1/0) cumulés sur les
    formeWindow derniers matchs (5 ou 6), matches supposé trié du plus récent en haut. */
 function computeTeamFDRInputs(matches, formeWindow = 5) {
-  const vndSeason = computeVND(matches, "butsObtenus", "butsConcedes");
+  // on filtre D'ABORD sur les matchs ayant réellement des buts (Forebet), PUIS on prend
+  // les N derniers PARMI CEUX-LÀ — sinon "les 5 derniers" pouvait désigner les 5 derniers
+  // matchs TOUTES SOURCES confondues (dont la plupart sans buts), et la forme récente se
+  // retrouvait calculée sur 2-3 matchs seulement au lieu de 5
+  const butsMatches = (matches || []).filter((m) => m.butsObtenus !== "" && m.butsObtenus !== undefined && m.butsConcedes !== "" && m.butsConcedes !== undefined);
+  if (!butsMatches.length) return null;
+  const vndSeason = computeVND(butsMatches, "butsObtenus", "butsConcedes");
   if (!vndSeason) return null;
   const ppm = ppgFromVnd(vndSeason);
-  const recent = (matches || []).slice(0, formeWindow);
+  const recent = butsMatches.slice(0, formeWindow);
   const vndRecent = computeVND(recent, "butsObtenus", "butsConcedes");
   const formePoints = vndRecent ? vndRecent.vic * 3 + vndRecent.nul : null;
   const formeN = vndRecent ? vndRecent.n : 0;
@@ -5797,20 +5869,22 @@ function computeTeamFDRInputs(matches, formeWindow = 5) {
    récentes (jusqu'à 3), etc. Dès 1 confrontation valide saisie, un balayage net donne un
    signal (avant il fallait au moins 2 saisies, ce qui bloquait sur "neutre" par défaut
    si l'utilisateur n'avait rentré qu'un seul match direct). */
-function computeH2hFDRId(h2h, perspective = "A") {
+function computeH2hScore(h2h, perspective = "A") {
   const valid = (h2h || []).filter((m) => m.butsA !== "" && m.butsA !== undefined && m.butsB !== "" && m.butsB !== undefined);
   const recent = valid.slice(0, 3);
-  if (recent.length < 1) return "neutre";
+  if (!recent.length) return { score: 3, n: 0, margin: 0, label: "Aucune confrontation directe saisie pour ce duel" };
   const winsA = recent.filter((m) => num(m.butsA) > num(m.butsB)).length;
   const winsB = recent.filter((m) => num(m.butsB) > num(m.butsA)).length;
   const winsAdv = perspective === "A" ? winsB : winsA;
   const winsUs = perspective === "A" ? winsA : winsB;
-  if (winsAdv === recent.length) return "adversaire";
-  if (winsUs === recent.length) return "nous";
-  return "neutre";
-}
-function countValidH2h(h2h) {
-  return (h2h || []).filter((m) => m.butsA !== "" && m.butsA !== undefined && m.butsB !== "" && m.butsB !== undefined).length;
+  const margin = winsAdv - winsUs; // >0 : l'adversaire domine le duel ; <0 : nous dominons
+  let score, label;
+  if (margin >= 2) { score = 5; label = "Bête noire historique"; }
+  else if (margin === 1) { score = 4; label = "Léger désavantage récent"; }
+  else if (margin === 0) { score = 3; label = "Historique équilibré"; }
+  else if (margin === -1) { score = 2; label = "Léger avantage récent"; }
+  else { score = 1; label = "Ascendant psychologique"; }
+  return { score, n: recent.length, margin, label };
 }
 
 /* Petite barre 1.0→5.0 (même dégradé que les paliers) avec un repère par équipe pour
@@ -5868,18 +5942,11 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h }) {
 
   const venueForA = venue === "A" ? "D" : venue === "B" ? "E" : "N";
   const venueForB = venue === "B" ? "D" : venue === "A" ? "E" : "N";
-  const h2hForA = computeH2hFDRId(h2h, "A");
-  const h2hForB = computeH2hFDRId(h2h, "B");
-  const h2hCount = countValidH2h(h2h);
-  // "neutre" a 2 causes bien distinctes : pas de confrontation directe saisie du tout
-  // pour ce duel, ou un historique saisi mais équilibré (pas de balayage 3-0 net)
-  const h2hSub = (id) => {
-    if (id === "neutre" && h2hCount === 0) return "Aucune confrontation directe saisie pour ce duel";
-    return FDR_H2H_OPTIONS.find((o) => o.id === id)?.sub;
-  };
+  const h2hA = computeH2hScore(h2h, "A");
+  const h2hB = computeH2hScore(h2h, "B");
 
-  const rA = inputsB ? computeFDR({ ppm: inputsB.ppm, forme: inputsB.formePoints, formeWindow, venueId: venueForA, h2hId: h2hForA }) : null;
-  const rB = inputsA ? computeFDR({ ppm: inputsA.ppm, forme: inputsA.formePoints, formeWindow, venueId: venueForB, h2hId: h2hForB }) : null;
+  const rA = inputsB ? computeFDR({ ppm: inputsB.ppm, forme: inputsB.formePoints, formeWindow, venueId: venueForA, h2hScore: h2hA.score }) : null;
+  const rB = inputsA ? computeFDR({ ppm: inputsA.ppm, forme: inputsA.formePoints, formeWindow, venueId: venueForB, h2hScore: h2hB.score }) : null;
 
   const Card = ({ name, color, r, missing }) => (
     <div style={{ flex: 1, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 10, padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
@@ -5895,7 +5962,13 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h }) {
           <FDRRow label="Niveau adversaire" weight={FDR_WEIGHTS.adversaire} note={r.v1} contribution={r.v1 * FDR_WEIGHTS.adversaire} />
           <FDRRow label="Forme adversaire" weight={FDR_WEIGHTS.forme} note={r.v2} contribution={r.v2 * FDR_WEIGHTS.forme} />
           <FDRRow label="Terrain" sub={FDR_VENUE_OPTIONS.find((o) => o.id === (color === C.teamA ? venueForA : venueForB))?.label} weight={FDR_WEIGHTS.terrain} note={r.v3} contribution={r.v3 * FDR_WEIGHTS.terrain} />
-          <FDRRow label="H2H" sub={h2hSub(color === C.teamA ? h2hForA : h2hForB)} weight={FDR_WEIGHTS.h2h} note={r.v4} contribution={r.v4 * FDR_WEIGHTS.h2h} />
+          <FDRRow
+            label="H2H"
+            sub={`${(color === C.teamA ? h2hA : h2hB).label}${(color === C.teamA ? h2hA : h2hB).n ? ` (sur ${(color === C.teamA ? h2hA : h2hB).n} confrontation${(color === C.teamA ? h2hA : h2hB).n > 1 ? "s" : ""})` : ""}`}
+            weight={FDR_WEIGHTS.h2h}
+            note={r.v4}
+            contribution={r.v4 * FDR_WEIGHTS.h2h}
+          />
         </>
       )}
     </div>
