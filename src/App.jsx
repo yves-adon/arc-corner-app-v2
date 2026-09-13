@@ -1526,6 +1526,7 @@ function computeButsStats(matches, alpha = 0.25) {
 function filterCombinedSourceMatches(matches) {
   return matches.filter(
     (m) =>
+      m.forebetTouched === true &&
       m.butsObtenus !== "" && m.butsObtenus !== undefined &&
       m.butsConcedes !== "" && m.butsConcedes !== undefined &&
       ((m.attDangObtenus !== "" && m.attDangObtenus !== undefined) || (m.obtenus !== "" && m.obtenus !== undefined))
@@ -1902,8 +1903,8 @@ function parseTotalCornerBlock(raw, teamName) {
         corners1MTConcedes: "",
         corners2MTObtenus: "",
         corners2MTConcedes: "",
-        butsObtenus: "",
-        butsConcedes: "",
+        butsObtenus: butsHome !== null ? String(isHome ? butsHome : butsAway) : "",
+        butsConcedes: butsHome !== null ? String(isHome ? butsAway : butsHome) : "",
         ligue: resolveLigue(blockMarkerStarts[bi]),
         date: firstDate(block) === "date inconnue" ? "" : firstDate(block),
       };
@@ -2466,7 +2467,7 @@ function ForebetMatchRows({ matches, allMatches, setAllMatches, color }) {
   const remove = (id) => setAllMatches(allMatches.filter((m) => m.id !== id));
   const addNew = () =>
     setAllMatches([
-      { id: uid(), obtenus: "", concedes: "", lieu: "", tirsObtenus: "", tirsConcedes: "", attDangObtenus: "", attDangConcedes: "", corners1MTObtenus: "", corners1MTConcedes: "", corners2MTObtenus: "", corners2MTConcedes: "", butsObtenus: "", butsConcedes: "", buts1MTObtenus: "", buts1MTConcedes: "", xGObtenus: "", xGConcedes: "", ligue: "", date: "" },
+      { id: uid(), obtenus: "", concedes: "", lieu: "", tirsObtenus: "", tirsConcedes: "", attDangObtenus: "", attDangConcedes: "", corners1MTObtenus: "", corners1MTConcedes: "", corners2MTObtenus: "", corners2MTConcedes: "", butsObtenus: "", butsConcedes: "", buts1MTObtenus: "", buts1MTConcedes: "", xGObtenus: "", xGConcedes: "", ligue: "", date: "", forebetTouched: true },
       ...allMatches,
     ]);
   return (
@@ -2648,7 +2649,10 @@ function TeamProfileForm({ team, setTeam, color, label }) {
   // TotalCorner ne remplit plus jamais les champs buts, seuls les matchs réellement
   // importés depuis Forebet ont des buts — plus aucun risque que TotalCorner seul
   // "contamine" les panneaux Forebet/Combiné.
-  const butsBaseMatches = leagueMatches.filter((m) => m.butsObtenus !== "" && m.butsObtenus !== undefined && m.butsConcedes !== "" && m.butsConcedes !== undefined);
+  // "forebetTouched" (pas juste butsObtenus non-vide) : les buts peuvent aussi venir du
+  // score embarqué dans le PDF TotalCorner (autres saisons potentiellement) — seules les
+  // lignes réellement confirmées par un import Forebet comptent ici
+  const butsBaseMatches = leagueMatches.filter((m) => m.forebetTouched === true && m.butsObtenus !== "" && m.butsObtenus !== undefined && m.butsConcedes !== "" && m.butsConcedes !== undefined);
   const butsScopedMatches = butsLimitRecent ? butsBaseMatches.slice(0, Math.max(1, Math.round(num(butsRecentCount)) || 10)) : butsBaseMatches;
   const butsStats = computeButsStats(butsScopedMatches, 0.25);
   const combinedBaseMatches = filterCombinedSourceMatches(leagueMatches);
@@ -4116,6 +4120,7 @@ function mergeForebetByDate(matches, parsed) {
         butsObtenus: p.butsObtenus, butsConcedes: p.butsConcedes,
         buts1MTObtenus: p.buts1MTObtenus, buts1MTConcedes: p.buts1MTConcedes,
         xGObtenus: "", xGConcedes: "", ligue: "", date: p.date,
+        forebetTouched: true,
       });
       created++;
       return;
@@ -4134,6 +4139,10 @@ function mergeForebetByDate(matches, parsed) {
       butsConcedes: fillIfEmpty(existing.butsConcedes, p.butsConcedes),
       buts1MTObtenus: fillIfEmpty(existing.buts1MTObtenus, p.buts1MTObtenus),
       buts1MTConcedes: fillIfEmpty(existing.buts1MTConcedes, p.buts1MTConcedes),
+      // marque cette ligne comme confirmée par un VRAI import Forebet — sert de base aux
+      // panneaux Forebet/Combiné et au calcul FDR (PPM saison), qui doivent ignorer les
+      // buts simplement embarqués dans le PDF TotalCorner (autres saisons potentiellement)
+      forebetTouched: true,
     };
     filled++;
   });
@@ -5847,11 +5856,13 @@ function FDRRow({ label, sub, weight, note, contribution }) {
    contrairement à l'ancienne version. "forme récente" = points (3/1/0) cumulés sur les
    formeWindow derniers matchs (5 ou 6), matches supposé trié du plus récent en haut. */
 function computeTeamFDRInputs(matches, formeWindow = 5) {
-  // on filtre D'ABORD sur les matchs ayant réellement des buts (Forebet), PUIS on prend
-  // les N derniers PARMI CEUX-LÀ — sinon "les 5 derniers" pouvait désigner les 5 derniers
-  // matchs TOUTES SOURCES confondues (dont la plupart sans buts), et la forme récente se
-  // retrouvait calculée sur 2-3 matchs seulement au lieu de 5
-  const butsMatches = (matches || []).filter((m) => m.butsObtenus !== "" && m.butsObtenus !== undefined && m.butsConcedes !== "" && m.butsConcedes !== undefined);
+  // on filtre D'ABORD sur les matchs réellement confirmés par un import Forebet
+  // (forebetTouched, pas juste butsObtenus non-vide — sinon un score embarqué dans le PDF
+  // TotalCorner, potentiellement d'une AUTRE saison, fausserait le PPM saison), PUIS on
+  // prend les N derniers PARMI CEUX-LÀ — sinon "les 5 derniers" pouvait désigner les 5
+  // derniers matchs TOUTES SOURCES confondues, et la forme récente se retrouvait calculée
+  // sur 2-3 matchs seulement au lieu de 5
+  const butsMatches = (matches || []).filter((m) => m.forebetTouched === true && m.butsObtenus !== "" && m.butsObtenus !== undefined && m.butsConcedes !== "" && m.butsConcedes !== undefined);
   if (!butsMatches.length) return null;
   const vndSeason = computeVND(butsMatches, "butsObtenus", "butsConcedes");
   if (!vndSeason) return null;
