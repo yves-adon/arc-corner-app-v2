@@ -6239,6 +6239,40 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h }) {
           <Card name={teamBName} color={C.teamB} r={rB} missing={!inputsA} />
         </div>
 
+        {rA && rB && (() => {
+          // "Difficile"/"Très difficile" = score >= 3.4 (voir FDR_BANDS) ; "Facile" =
+          // "Très facile"/"Abordable", score < 2.6. Deux équipes toutes deux étiquetées
+          // difficiles l'une pour l'autre = choc entre deux équipes fortes en même temps
+          // — historiquement plus fermé (chacune craint de perdre plus qu'elle ne cherche
+          // à gagner), à l'inverse d'un écart net qui tend à ouvrir le score (le favori
+          // concède quand même, l'outsider marque aussi). Observation empirique de
+          // l'utilisateur (2 matchs, échantillon faible) — affiché comme repère, pas
+          // comme une correction du calcul.
+          const isHard = (r) => r.score >= 3.4;
+          const isEasy = (r) => r.score < 2.6;
+          const bothHard = isHard(rA) && isHard(rB);
+          const clearGap = (isEasy(rA) && isHard(rB)) || (isHard(rA) && isEasy(rB));
+          if (!bothHard && !clearGap) return null;
+          return (
+            <div
+              style={{
+                padding: "8px 10px",
+                borderRadius: 8,
+                background: (bothHard ? C.jouable : C.solide) + "18",
+                border: `1px solid ${(bothHard ? C.jouable : C.solide)}55`,
+                fontSize: 11,
+                color: C.dim,
+              }}
+            >
+              {bothHard ? (
+                <>⚠️ Choc entre deux équipes fortes ({teamAName || "A"} et {teamBName || "B"} sont toutes les deux "Difficile" l'une pour l'autre) — ces matchs sont historiquement plus fermés que ce que suggèrent l'attaque/défense seules ; prudence sur BTTS/Over ci-dessous.</>
+              ) : (
+                <>ℹ️ Écart de FDR net entre les deux équipes — ces matchs ont tendance à être plus ouverts en buts (le favori concède quand même, l'outsider marque aussi), à garder en tête en lisant BTTS/Over ci-dessous.</>
+              )}
+            </div>
+          );
+        })()}
+
         {inputsA && inputsB && (
           <div style={{ borderTop: `1px solid ${C.line}`, paddingTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
             <div style={{ fontSize: 10, color: C.faint, textTransform: "uppercase", letterSpacing: 0.4 }}>
