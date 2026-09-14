@@ -3095,6 +3095,13 @@ function EloPanel({ teamAName, teamBName }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [searched, setSearched] = useState(false);
+  // ClubElo bloque les requêtes depuis Vercel (hébergement de l'app) — la recherche
+  // automatique ne fonctionne donc pas en prod. Saisie manuelle en mode par défaut : tu
+  // recopies les Elo affichés ailleurs (ex. "Rapport de force" sur Foresportia, qui a son
+  // propre système de notation) directement ici, sans dépendre de l'appel réseau.
+  const [manualMode, setManualMode] = useState(true);
+  const [manualEloA, setManualEloA] = useState("");
+  const [manualEloB, setManualEloB] = useState("");
 
   useEffect(() => {
     setNameA(teamAName || "");
@@ -3118,7 +3125,7 @@ function EloPanel({ teamAName, teamBName }) {
       const [a, b] = await Promise.all([fetchClubElo(nameA), fetchClubElo(nameB)]);
       if (!a || !b) {
         setError(
-          `Club introuvable sur ClubElo : ${!a ? `"${nameA}"` : ""}${!a && !b ? " et " : ""}${!b ? `"${nameB}"` : ""} — essaie une orthographe différente (ex. "Bodo/Glimt", "Celtic").`
+          `Club introuvable sur ClubElo : ${!a ? `"${nameA}"` : ""}${!a && !b ? " et " : ""}${!b ? `"${nameB}"` : ""} — essaie une orthographe différente (ex. "Bodo/Glimt", "Celtic"), ou passe en saisie manuelle si ClubElo reste injoignable.`
         );
         setEloA(a);
         setEloB(b);
@@ -3129,54 +3136,82 @@ function EloPanel({ teamAName, teamBName }) {
       setEloB(b);
       setSearched(true);
     } catch (e) {
-      setError("Impossible de contacter ClubElo pour le moment — réessaie dans un instant.");
+      setError("Impossible de contacter ClubElo pour le moment (souvent bloqué depuis l'hébergement de l'app) — passe en saisie manuelle ci-dessus.");
     }
     setBusy(false);
   };
 
-  const matchup = eloA && eloB ? computeEloMatchup(eloA.elo, eloB.elo, 100) : null;
+  const manualElo = manualMode && manualEloA !== "" && manualEloB !== "" ? { a: { club: nameA || teamAName || "Équipe A", elo: num(manualEloA), country: "", fromCache: false, stale: false }, b: { club: nameB || teamBName || "Équipe B", elo: num(manualEloB), country: "", fromCache: false, stale: false } } : null;
+  const activeEloA = manualMode ? manualElo?.a : eloA;
+  const activeEloB = manualMode ? manualElo?.b : eloB;
+  const matchup = activeEloA && activeEloB ? computeEloMatchup(activeEloA.elo, activeEloB.elo, 100) : null;
 
   return (
     <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
-      <SectionTitle sub="marché 1X2 · optionnel">Force relative (Elo — ClubElo)</SectionTitle>
+      <SectionTitle sub="marché 1X2 · optionnel">Force relative (Elo)</SectionTitle>
       <div style={{ fontSize: 10.5, color: C.faint, lineHeight: 1.4 }}>
-        Compare deux équipes même si elles ne jouent jamais dans la même ligue (ex. Bodø/Glimt vs Celtic) — via
-        l'historique Elo public de <b style={{ color: C.text }}>ClubElo</b>, calibré par les matchs de coupes
-        d'Europe qui relient les championnats entre eux.
+        Compare deux équipes même si elles ne jouent jamais dans la même ligue (ex. Bodø/Glimt vs Celtic) — normalement
+        via l'historique Elo public de <b style={{ color: C.text }}>ClubElo</b>, mais leur API bloque les requêtes
+        depuis l'hébergement de l'app (Vercel). Saisie manuelle recommandée : recopie un Elo affiché ailleurs (ex. le
+        "Rapport de force" d'un autre site).
       </div>
+
       <div style={{ display: "flex", gap: 6 }}>
-        <TextInput value={nameA} onChange={setNameA} placeholder="Nom ClubElo équipe A" accent={C.teamA} />
-        <TextInput value={nameB} onChange={setNameB} placeholder="Nom ClubElo équipe B" accent={C.teamB} />
+        <button
+          onClick={() => setManualMode(true)}
+          style={{ flex: 1, fontSize: 11, fontWeight: 700, padding: "6px 8px", borderRadius: 6, border: `1px solid ${manualMode ? C.solide + "88" : C.line}`, background: manualMode ? C.solide + "22" : "transparent", color: manualMode ? C.solide : C.faint, cursor: "pointer" }}
+        >
+          Saisie manuelle
+        </button>
+        <button
+          onClick={() => setManualMode(false)}
+          style={{ flex: 1, fontSize: 11, fontWeight: 700, padding: "6px 8px", borderRadius: 6, border: `1px solid ${!manualMode ? C.solide + "88" : C.line}`, background: !manualMode ? C.solide + "22" : "transparent", color: !manualMode ? C.solide : C.faint, cursor: "pointer" }}
+        >
+          Recherche ClubElo (souvent bloquée)
+        </button>
       </div>
-      <button
-        onClick={run}
-        disabled={busy}
-        style={{ background: C.solide + "22", color: C.solide, border: `1px solid ${C.solide}55`, borderRadius: 6, padding: "7px", fontSize: 12, fontWeight: 700, cursor: busy ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 5 }}
-      >
-        {busy ? <Loader2 size={13} className="animate-spin" /> : null} {busy ? "Recherche…" : "Chercher force Elo"}
-      </button>
-      {error && <div style={{ fontSize: 11, color: C.fragile }}>{error}</div>}
-      {searched && eloA && eloB && (
+
+      <div style={{ display: "flex", gap: 6 }}>
+        <TextInput value={nameA} onChange={setNameA} placeholder={manualMode ? "Nom équipe A" : "Nom ClubElo équipe A"} accent={C.teamA} />
+        <TextInput value={nameB} onChange={setNameB} placeholder={manualMode ? "Nom équipe B" : "Nom ClubElo équipe B"} accent={C.teamB} />
+      </div>
+
+      {manualMode ? (
+        <div style={{ display: "flex", gap: 6 }}>
+          <NumInput value={manualEloA} onChange={setManualEloA} placeholder="Elo A (ex. 1542)" accent={C.teamA} />
+          <NumInput value={manualEloB} onChange={setManualEloB} placeholder="Elo B (ex. 1529)" accent={C.teamB} />
+        </div>
+      ) : (
+        <button
+          onClick={run}
+          disabled={busy}
+          style={{ background: C.solide + "22", color: C.solide, border: `1px solid ${C.solide}55`, borderRadius: 6, padding: "7px", fontSize: 12, fontWeight: 700, cursor: busy ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 5 }}
+        >
+          {busy ? <Loader2 size={13} className="animate-spin" /> : null} {busy ? "Recherche…" : "Chercher force Elo"}
+        </button>
+      )}
+      {!manualMode && error && <div style={{ fontSize: 11, color: C.fragile }}>{error}</div>}
+      {!manualMode && searched && eloA && eloB && (eloA.fromCache || eloB.fromCache) && (
+        <div style={{ fontSize: 10, color: eloA.stale || eloB.stale ? C.jouable : C.faint, textAlign: "center" }}>
+          {eloA.stale || eloB.stale
+            ? "⚠️ ClubElo injoignable à l'instant — dernière donnée connue réutilisée (peut-être un peu ancienne)"
+            : "donnée en cache (moins de 12h) — pas de nouvel appel à ClubElo"}
+        </div>
+      )}
+      {activeEloA && activeEloB && (
         <>
           <div style={{ display: "flex", justifyContent: "space-between", fontFamily: FONT_MONO, fontSize: 13 }}>
             <div>
-              <div style={{ color: C.teamA, fontWeight: 700 }}>{eloA.club}</div>
-              <div style={{ color: C.dim }}>Elo {eloA.elo.toFixed(0)}</div>
-              <div style={{ color: C.faint, fontSize: 10 }}>{eloA.country}</div>
+              <div style={{ color: C.teamA, fontWeight: 700 }}>{activeEloA.club}</div>
+              <div style={{ color: C.dim }}>Elo {activeEloA.elo.toFixed(0)}</div>
+              {activeEloA.country && <div style={{ color: C.faint, fontSize: 10 }}>{activeEloA.country}</div>}
             </div>
             <div style={{ textAlign: "right" }}>
-              <div style={{ color: C.teamB, fontWeight: 700 }}>{eloB.club}</div>
-              <div style={{ color: C.dim }}>Elo {eloB.elo.toFixed(0)}</div>
-              <div style={{ color: C.faint, fontSize: 10 }}>{eloB.country}</div>
+              <div style={{ color: C.teamB, fontWeight: 700 }}>{activeEloB.club}</div>
+              <div style={{ color: C.dim }}>Elo {activeEloB.elo.toFixed(0)}</div>
+              {activeEloB.country && <div style={{ color: C.faint, fontSize: 10 }}>{activeEloB.country}</div>}
             </div>
           </div>
-          {(eloA.fromCache || eloB.fromCache) && (
-            <div style={{ fontSize: 10, color: eloA.stale || eloB.stale ? C.jouable : C.faint, textAlign: "center" }}>
-              {eloA.stale || eloB.stale
-                ? "⚠️ ClubElo injoignable à l'instant — dernière donnée connue réutilisée (peut-être un peu ancienne)"
-                : "donnée en cache (moins de 12h) — pas de nouvel appel à ClubElo"}
-            </div>
-          )}
           {matchup && (
             <>
               <div style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 8, padding: 10 }}>
@@ -3184,19 +3219,18 @@ function EloPanel({ teamAName, teamBName }) {
                   pctVic={matchup.pHome * 100}
                   pctNul={matchup.pDraw * 100}
                   pctDef={matchup.pAway * 100}
-                  labelVic={eloA.club}
-                  labelDef={eloB.club}
+                  labelVic={activeEloA.club}
+                  labelDef={activeEloB.club}
                   colorVic={C.teamA}
                   colorDef={C.teamB}
                 />
                 <div style={{ textAlign: "center", fontSize: 11, color: C.faint, marginTop: 6 }}>
-                  écart Elo {matchup.diff >= 0 ? "+" : ""}{matchup.diff.toFixed(0)} (avantage terrain de {eloA.club} déjà inclus)
+                  écart Elo {matchup.diff >= 0 ? "+" : ""}{matchup.diff.toFixed(0)} (avantage terrain de {activeEloA.club} déjà inclus)
                 </div>
               </div>
               <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic" }}>
                 Probabilités approximatives dérivées de l'écart d'Elo (formule standard + modèle de nul simplifié) —
-                pas la méthode exacte propriétaire de ClubElo, à prendre comme ordre de grandeur, pas comme cote
-                officielle.
+                à prendre comme ordre de grandeur, pas comme cote officielle.
               </div>
             </>
           )}
@@ -5966,6 +6000,161 @@ function FdrGaugeBar({ teamAName, teamAScore, teamAColor, teamBName, teamBScore,
    reste un choix (propre à CE match précis, non déductible de l'historique). Calcule et
    affiche le score des DEUX équipes en simultané (symétrique : ce qui est dur pour A est
    généralement facile pour B et inversement). */
+/* Projection simple de buts — extraite en fonction réutilisable (utilisée à la fois pour
+   l'affichage attaque/défense ET pour le bloc "convergence stratégie" qui croise ce
+   signal avec TotalCorner/Foresportia). Pas un modèle de probabilité complet (pas de
+   Poisson), juste un repère à partir des mêmes buts saisis que le reste du FDR. */
+function computeGoalsProjection(inputsA, inputsB) {
+  const xA = (inputsA.attaque + inputsB.defense) / 2;
+  const xB = (inputsB.attaque + inputsA.defense) / 2;
+  const total = xA + xB;
+  const diff = total - 2.5;
+  const overLikely = diff > 0.3;
+  const underLikely = diff < -0.3;
+  const ouLabel = overLikely ? "Over 2.5 probable" : underLikely ? "Under 2.5 probable" : "Équilibré autour de 2.5";
+  const ouColor = overLikely ? C.solide : underLikely ? C.fragile : C.jouable;
+  const bttsLikely = xA >= 1.0 && xB >= 1.0;
+  const bttsUnlikely = xA < 0.75 || xB < 0.75;
+  const bttsLabel = bttsLikely ? "BTTS probable" : bttsUnlikely ? "BTTS peu probable" : "BTTS incertain";
+  const bttsColor = bttsLikely ? C.solide : bttsUnlikely ? C.fragile : C.jouable;
+  return { xA, xB, total, diff, overLikely, underLikely, ouLabel, ouColor, bttsLikely, bttsUnlikely, bttsLabel, bttsColor };
+}
+
+/* --- Modèle de Poisson : vraies probabilités (BTTS/Over-Under en %, scores exacts) ---
+   S'AJOUTE à la projection simple ci-dessus (computeGoalsProjection), ne la remplace pas
+   — les deux blocs restent affichés, la projection simple donnant un repère "à l'oeil"
+   rapide et le Poisson une vraie distribution de probabilité à partir des mêmes buts
+   attendus (xA, xB). C'est une méthode standard en football (buts modélisés comme un
+   processus de Poisson indépendant par équipe), pas un algorithme propriétaire — ça ne
+   capture pas les corrélations fines entre les deux équipes (ex. un but qui pousse
+   l'adversaire à se découvrir), donc à prendre comme un bon ordre de grandeur, pas une
+   cote exacte. */
+function poissonPMF(k, lambda) {
+  if (lambda <= 0) return k === 0 ? 1 : 0;
+  let fact = 1;
+  for (let i = 2; i <= k; i++) fact *= i;
+  return (Math.exp(-lambda) * Math.pow(lambda, k)) / fact;
+}
+function computePoissonMarket(xA, xB, maxGoals = 8) {
+  const grid = [];
+  for (let i = 0; i <= maxGoals; i++) {
+    for (let j = 0; j <= maxGoals; j++) {
+      grid.push({ i, j, p: poissonPMF(i, xA) * poissonPMF(j, xB) });
+    }
+  }
+  const pBtts = (1 - Math.exp(-xA)) * (1 - Math.exp(-xB));
+  const pUnder25 = grid.filter((g) => g.i + g.j <= 2).reduce((s, g) => s + g.p, 0);
+  const pOver25 = 1 - pUnder25;
+  const pHome = grid.filter((g) => g.i > g.j).reduce((s, g) => s + g.p, 0);
+  const pDraw = grid.filter((g) => g.i === g.j).reduce((s, g) => s + g.p, 0);
+  const pAway = grid.filter((g) => g.i < g.j).reduce((s, g) => s + g.p, 0);
+  // marché combiné "BTTS + Over 2.5" — les deux conditions EN MÊME TEMPS sur le même
+  // score (ex. 2-1, 1-2, 2-2, 3-1... mais PAS 1-1, qui est BTTS mais pas Over 2.5) —
+  // c'est la vraie probabilité du pari combiné que joue l'utilisateur (Règle 2), pas
+  // juste BTTS et Over pris séparément
+  const pBttsAndOver25 = grid.filter((g) => g.i >= 1 && g.j >= 1 && g.i + g.j > 2).reduce((s, g) => s + g.p, 0);
+  const topScores = [...grid].sort((a, b) => b.p - a.p).slice(0, 5);
+  const topBttsOverScores = grid
+    .filter((g) => g.i >= 1 && g.j >= 1 && g.i + g.j > 2)
+    .sort((a, b) => b.p - a.p)
+    .slice(0, 5);
+  // scores BTTS toutes issues confondues (y compris sous 2.5, ex. 1-1) — sert à la Règle
+  // 1 (VN+BTTS) où le total de buts n'entre pas en jeu, contrairement à topBttsOverScores
+  const topBttsScores = grid
+    .filter((g) => g.i >= 1 && g.j >= 1)
+    .sort((a, b) => b.p - a.p)
+    .slice(0, 5);
+  return { pBtts, pOver25, pUnder25, pHome, pDraw, pAway, pBttsAndOver25, topScores, topBttsOverScores, topBttsScores };
+}
+
+/* Bloc "convergence stratégie" — reprend telle quelle la grille de décision de
+   l'utilisateur : les 2 signaux externes (TotalCorner handicap buts, Foresportia) se
+   saisissent à la main (hors de l'app, pas automatisables), et se croisent avec le FDR
+   (BTTS/Over déjà calculés automatiquement) pour donner directement le verdict à jouer.
+   Règle 1 (VN+BTTS) exige un favori identique sur les 2 sites externes. Règle 2
+   (BTTS+Over) ne dépend PAS d'un favori — elle s'applique même quand les 2 sites ne sont
+   pas d'accord sur le favori, ce qui correspond exactement à l'usage décrit. */
+function StrategyConvergence({ teamAName, teamBName, proj }) {
+  const [tcFavori, setTcFavori] = useState(null); // "A" | "B" | null
+  const [fsFavori, setFsFavori] = useState(null);
+  const [tcOver, setTcOver] = useState(false);
+  const [fsOverBtts, setFsOverBtts] = useState(false);
+
+  const favoriAgree = tcFavori !== null && fsFavori !== null && tcFavori === fsFavori;
+  const favoriTeamName = favoriAgree ? (tcFavori === "A" ? teamAName || "équipe A" : teamBName || "équipe B") : null;
+
+  const rule1 = favoriAgree && proj.bttsLikely;
+  const rule2 = proj.bttsLikely && proj.overLikely && tcOver && fsOverBtts;
+  const verdict = rule1 ? { text: `Joue VN ${favoriTeamName} + BTTS`, color: C.solide } : rule2 ? { text: "Joue BTTS + Over 2.5", color: C.solide } : null;
+
+  const FavoriToggle = ({ label, value, onChange }) => (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <span style={{ fontSize: 10, color: C.faint }}>{label}</span>
+      <div style={{ display: "flex", gap: 5 }}>
+        {[{ id: "A", txt: teamAName || "A" }, { id: "B", txt: teamBName || "B" }, { id: null, txt: "pas clair" }].map((o) => (
+          <button
+            key={o.id ?? "none"}
+            onClick={() => onChange(o.id)}
+            style={{
+              fontSize: 10.5,
+              fontWeight: 700,
+              padding: "5px 8px",
+              borderRadius: 6,
+              border: `1px solid ${value === o.id ? C.solide + "88" : C.line}`,
+              background: value === o.id ? C.solide + "22" : "transparent",
+              color: value === o.id ? C.solide : C.faint,
+              cursor: "pointer",
+            }}
+          >
+            {o.txt}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ borderTop: `1px solid ${C.line}`, paddingTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ fontSize: 10, color: C.faint, textTransform: "uppercase", letterSpacing: 0.4 }}>
+        Convergence stratégie — TotalCorner + Foresportia + FDR (BTTS {proj.bttsLabel.toLowerCase()} · {proj.ouLabel.toLowerCase()})
+      </div>
+
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+        <FavoriToggle label="Favori handicap buts — TotalCorner" value={tcFavori} onChange={setTcFavori} />
+        <FavoriToggle label="Favori — Foresportia" value={fsFavori} onChange={setFsFavori} />
+      </div>
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {[
+          { active: tcOver, toggle: () => setTcOver((v) => !v), label: "TotalCorner prédit Over" },
+          { active: fsOverBtts, toggle: () => setFsOverBtts((v) => !v), label: "Foresportia : Over/BTTS élevés" },
+        ].map((o) => (
+          <button
+            key={o.label}
+            onClick={o.toggle}
+            style={{ fontSize: 10.5, fontWeight: 700, padding: "5px 8px", borderRadius: 6, border: `1px solid ${o.active ? C.solide + "88" : C.line}`, background: o.active ? C.solide + "22" : "transparent", color: o.active ? C.solide : C.faint, cursor: "pointer" }}
+          >
+            {o.active ? "✓" : "+"} {o.label}
+          </button>
+        ))}
+      </div>
+
+      {verdict ? (
+        <div style={{ padding: "10px 12px", borderRadius: 8, background: verdict.color + "18", border: `1px solid ${verdict.color}55`, fontWeight: 700, color: verdict.color, fontSize: 12.5 }}>
+          ✅ {verdict.text}
+        </div>
+      ) : (
+        <div style={{ fontSize: 11, color: C.faint }}>Aucune des 2 règles ne matche pour l'instant.</div>
+      )}
+
+      <div style={{ fontSize: 9, color: C.faint, fontStyle: "italic" }}>
+        Règle 1 : même favori sur TotalCorner et Foresportia + BTTS probable (FDR) → VN du favori + BTTS.
+        Règle 2 : BTTS et Over probables (FDR), Over confirmé sur TotalCorner et Foresportia → BTTS + Over — s'applique aussi quand les 2 sites ne sont pas d'accord sur le favori, puisque cette règle ne dépend pas d'un vainqueur.
+      </div>
+    </div>
+  );
+}
+
 function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h }) {
   const [formeWindow, setFormeWindow] = useState(5);
   const [venue, setVenue] = useState("A"); // "A" = A à domicile, "N" = neutre, "B" = B à domicile
@@ -6072,29 +6261,16 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h }) {
               </div>
             </div>
             {(() => {
-              // projection simple : ce qu'une équipe devrait marquer = moyenne de sa
-              // propre attaque et de la défense adverse — pas un modèle de probabilité
-              // complet (pas de Poisson, pas d'ajustement terrain/forme), juste un repère
-              // rapide pour BTTS/Over-Under à partir des mêmes buts saisis que le reste du FDR
-              const xA = (inputsA.attaque + inputsB.defense) / 2;
-              const xB = (inputsB.attaque + inputsA.defense) / 2;
-              const total = xA + xB;
-              const diff = total - 2.5;
-              const ouLabel = diff > 0.3 ? "Over 2.5 probable" : diff < -0.3 ? "Under 2.5 probable" : "Équilibré autour de 2.5";
-              const ouColor = diff > 0.3 ? C.solide : diff < -0.3 ? C.fragile : C.jouable;
-              const bttsLikely = xA >= 1.0 && xB >= 1.0;
-              const bttsUnlikely = xA < 0.75 || xB < 0.75;
-              const bttsLabel = bttsLikely ? "BTTS probable" : bttsUnlikely ? "BTTS peu probable" : "BTTS incertain";
-              const bttsColor = bttsLikely ? C.solide : bttsUnlikely ? C.fragile : C.jouable;
+              const proj = computeGoalsProjection(inputsA, inputsB);
               return (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   <div style={{ fontSize: 11, color: C.dim }}>
-                    buts projetés : <b style={{ color: C.teamA }}>{xA.toFixed(2)}</b> ({teamAName || "A"}) +{" "}
-                    <b style={{ color: C.teamB }}>{xB.toFixed(2)}</b> ({teamBName || "B"}) = <b style={{ color: C.text }}>{total.toFixed(2)}</b> au total
+                    buts projetés : <b style={{ color: C.teamA }}>{proj.xA.toFixed(2)}</b> ({teamAName || "A"}) +{" "}
+                    <b style={{ color: C.teamB }}>{proj.xB.toFixed(2)}</b> ({teamBName || "B"}) = <b style={{ color: C.text }}>{proj.total.toFixed(2)}</b> au total
                   </div>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    <Pill color={ouColor}>{ouLabel}</Pill>
-                    <Pill color={bttsColor}>{bttsLabel}</Pill>
+                    <Pill color={proj.ouColor}>{proj.ouLabel}</Pill>
+                    <Pill color={proj.bttsColor}>{proj.bttsLabel}</Pill>
                   </div>
                   <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic" }}>
                     projection simple (attaque d'une équipe croisée avec la défense de l'autre, moyenne saison) — pas un modèle de probabilité complet, à prendre comme repère
@@ -6103,6 +6279,84 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h }) {
               );
             })()}
           </div>
+        )}
+
+        {inputsA && inputsB && (() => {
+          const proj = computeGoalsProjection(inputsA, inputsB);
+          const poisson = computePoissonMarket(proj.xA, proj.xB);
+          return (
+            <div style={{ borderTop: `1px solid ${C.line}`, paddingTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ fontSize: 10, color: C.faint, textTransform: "uppercase", letterSpacing: 0.4 }}>
+                Modèle Poisson — vraies probabilités (à partir des mêmes buts attendus ci-dessus)
+              </div>
+              <div style={{ padding: "8px 10px", borderRadius: 8, background: C.solide + "18", border: `1px solid ${C.solide}55`, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
+                <span style={{ fontSize: 11, color: C.dim }}>BTTS + Over 2.5 combinés (ta Règle 2)</span>
+                <span style={{ fontSize: 20, fontWeight: 800, color: C.solide, fontFamily: FONT_DISPLAY }}>{(poisson.pBttsAndOver25 * 100).toFixed(0)}%</span>
+              </div>
+              <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontSize: 10, color: C.faint }}>BTTS (seul)</div>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: C.text, fontFamily: FONT_DISPLAY }}>{(poisson.pBtts * 100).toFixed(0)}%</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, color: C.faint }}>Over 2.5 (seul)</div>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: C.text, fontFamily: FONT_DISPLAY }}>{(poisson.pOver25 * 100).toFixed(0)}%</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, color: C.faint }}>Under 2.5</div>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: C.text, fontFamily: FONT_DISPLAY }}>{(poisson.pUnder25 * 100).toFixed(0)}%</div>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 10.5, color: C.dim }}>
+                <span>1 ({teamAName || "A"}) : <b style={{ color: C.teamA }}>{(poisson.pHome * 100).toFixed(0)}%</b></span>
+                <span>X : <b style={{ color: C.text }}>{(poisson.pDraw * 100).toFixed(0)}%</b></span>
+                <span>2 ({teamBName || "B"}) : <b style={{ color: C.teamB }}>{(poisson.pAway * 100).toFixed(0)}%</b></span>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: C.faint, marginBottom: 4 }}>scores qui comptent pour "BTTS + Over 2.5" (les plus probables)</div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {poisson.topBttsOverScores.map((s) => (
+                    <Pill key={`bo-${s.i}-${s.j}`} color={C.solide}>
+                      {s.i}-{s.j} · {(s.p * 100).toFixed(1)}%
+                    </Pill>
+                  ))}
+                </div>
+                <div style={{ fontSize: 9.5, color: C.faint, marginTop: 4 }}>
+                  ex. 1-1 n'y est jamais (2 buts, pas Over 2.5) — il faut au moins 2-1, 1-2 ou plus pour cocher les deux cases à la fois
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: C.faint, marginBottom: 4 }}>scores BTTS toutes issues (dont 1-1) — pour ta Règle 1, VN+BTTS</div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {poisson.topBttsScores.map((s) => (
+                    <Pill key={`b-${s.i}-${s.j}`} color={s.i + s.j > 2 ? C.jouable : C.teamB}>
+                      {s.i}-{s.j} · {(s.p * 100).toFixed(1)}%
+                    </Pill>
+                  ))}
+                </div>
+                <div style={{ fontSize: 9.5, color: C.faint, marginTop: 4 }}>
+                  ici le total de buts n'entre pas en jeu (le 1-1, en bleu, est BTTS mais sous 2.5 — il compte pour VN+BTTS, pas pour BTTS+Over)
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: C.faint, marginBottom: 4 }}>scores exacts les plus probables (toutes issues confondues)</div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {poisson.topScores.map((s) => (
+                    <Pill key={`${s.i}-${s.j}`} color={C.dim}>
+                      {s.i}-{s.j} · {(s.p * 100).toFixed(1)}%
+                    </Pill>
+                  ))}
+                </div>
+              </div>
+              <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic" }}>
+                modèle de Poisson indépendant standard (méthode répandue en football, pas propriétaire) — ne capture pas les corrélations fines entre les deux équipes (ex. un but qui pousse l'adversaire à se découvrir), à prendre comme bon ordre de grandeur
+              </div>
+            </div>
+          );
+        })()}
+
+        {inputsA && inputsB && (
+          <StrategyConvergence teamAName={teamAName} teamBName={teamBName} proj={computeGoalsProjection(inputsA, inputsB)} />
         )}
 
         <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic" }}>
