@@ -2400,9 +2400,18 @@ function volatiliteLabel(v) {
   if (v < 3.5) return { label: "Moyenne", color: C.jouable };
   return { label: "Forte", color: C.fragile };
 }
+/* Seuils dédiés BUTS — ceux de volatiliteLabel ci-dessus sont calibrés pour les corners
+   (totaux 0-20+), beaucoup trop larges pour un total de buts par match (0-6 typiquement) :
+   avec les seuils corners, la volatilité buts serait presque toujours classée "Faible",
+   badge inutile. */
+function volatiliteButsLabel(v) {
+  if (v < 1.3) return { label: "Faible", color: C.solide };
+  if (v < 2.0) return { label: "Moyenne", color: C.jouable };
+  return { label: "Forte", color: C.fragile };
+}
 
-function VolBadge({ vol, volSource }) {
-  const { label, color } = volatiliteLabel(vol);
+function VolBadge({ vol, volSource, labelFn = volatiliteLabel }) {
+  const { label, color } = labelFn(vol);
   const isEstimated = volSource === "estimée";
   return (
     <span
@@ -5907,28 +5916,61 @@ function FDRRow({ label, sub, weight, note, contribution }) {
    historique de buts déjà saisi pour une équipe (Forebet) — aucune saisie manuelle,
    contrairement à l'ancienne version. "forme récente" = points (3/1/0) cumulés sur les
    formeWindow derniers matchs (5 ou 6), matches supposé trié du plus récent en haut. */
-function computeTeamFDRInputs(matches, formeWindow = 5) {
+function computeTeamFDRInputs(matches, formeWindow = 5, venue = null) {
   // on filtre D'ABORD sur les matchs réellement confirmés par un import Forebet
   // (forebetTouched, pas juste butsObtenus non-vide — sinon un score embarqué dans le PDF
   // TotalCorner, potentiellement d'une AUTRE saison, fausserait le PPM saison), PUIS on
   // prend les N derniers PARMI CEUX-LÀ — sinon "les 5 derniers" pouvait désigner les 5
   // derniers matchs TOUTES SOURCES confondues, et la forme récente se retrouvait calculée
   // sur 2-3 matchs seulement au lieu de 5
-  const butsMatches = (matches || []).filter((m) => m.forebetTouched === true && m.butsObtenus !== "" && m.butsObtenus !== undefined && m.butsConcedes !== "" && m.butsConcedes !== undefined);
-  if (!butsMatches.length) return null;
-  const vndSeason = computeVND(butsMatches, "butsObtenus", "butsConcedes");
-  if (!vndSeason) return null;
-  const ppm = ppgFromVnd(vndSeason);
-  const recent = butsMatches.slice(0, formeWindow);
+  const allButsMatches = (matches || []).filter((m) => m.forebetTouched === true && m.butsObtenus !== "" && m.butsObtenus !== undefined && m.butsConcedes !== "" && m.butsConcedes !== undefined);
+  if (!allButsMatches.length) return null;
+
+  // forme récente : toujours sur les N derniers matchs TOUTES VENUES confondues — la
+  // forme/momentum n'est pas vraiment un phénomène domicile/extérieur, et filtrer par
+  // lieu réduirait trop l'échantillon récent pour rester représentatif du moment présent
+  const recent = allButsMatches.slice(0, formeWindow);
   const vndRecent = computeVND(recent, "butsObtenus", "butsConcedes");
   const formePoints = vndRecent ? vndRecent.vic * 3 + vndRecent.nul : null;
   const formeN = vndRecent ? vndRecent.n : 0;
-  // attaque/défense séparées (moyenne buts marqués / encaissés, saison) — utile pour
-  // BTTS et Over/Under, qui ont besoin de savoir séparément si une équipe marque
-  // beaucoup ET si elle encaisse beaucoup, pas juste "elle est forte" (PPM global) : une
-  // équipe peut être solide au classement en étant peu prolifique, et inversement
-  const butsSeries = computeStatSeries(butsMatches, "butsObtenus", "butsConcedes", 0.25);
-  return { ppm, n: vndSeason.n, formePoints, formeN, formeWindow, attaque: butsSeries.moyObtenus, defense: butsSeries.moyConcedes };
+
+  const vndAll = computeVND(allButsMatches, "butsObtenus", "butsConcedes");
+  if (!vndAll) return null;
+  const butsSeriesAll = computeStatSeries(allButsMatches, "butsObtenus", "butsConcedes", 0.25);
+
+  // PPM/attaque/défense/volatilité : MÉLANGE pondéré par taille d'échantillon entre le
+  // profil domicile/extérieur de cette équipe (celui qu'elle aura dans CE match précis)
+  // et le reste de son historique — pas un tout-ou-rien comme avant (qui bricolait un
+  // seuil arbitraire à 3 matchs et jetait complètement l'autre camp), mais un vrai
+  // mélange : le lieu pèse d'autant plus que l'échantillon dans ce lieu est grand, le
+  // reste de l'historique comble le manque sinon. Même technique de pondération que le
+  // mélange H2H/saison déjà utilisé ailleurs dans l'app (wavg = moyenne pondérée par n).
+  let ppm = ppgFromVnd(vndAll);
+  let attaque = butsSeriesAll.moyObtenus;
+  let defense = butsSeriesAll.moyConcedes;
+  let volatilite = butsSeriesAll.volatilite;
+  let venueSampleN = 0;
+  let venueWeight = null;
+
+  if (venue && venue !== "N") {
+    const venueMatches = allButsMatches.filter((m) => m.lieu === venue);
+    const otherMatches = allButsMatches.filter((m) => m.lieu !== venue);
+    venueSampleN = venueMatches.length;
+    if (venueSampleN >= 1 && otherMatches.length >= 1) {
+      const vndVenue = computeVND(venueMatches, "butsObtenus", "butsConcedes");
+      const vndOther = computeVND(otherMatches, "butsObtenus", "butsConcedes");
+      const bsVenue = computeStatSeries(venueMatches, "butsObtenus", "butsConcedes", 0.25);
+      const bsOther = computeStatSeries(otherMatches, "butsObtenus", "butsConcedes", 0.25);
+      const wavg = (valVenue, nVenue, valOther, nOther) => (valVenue * nVenue + valOther * nOther) / (nVenue + nOther);
+      ppm = wavg(ppgFromVnd(vndVenue), vndVenue.n, ppgFromVnd(vndOther), vndOther.n);
+      attaque = wavg(bsVenue.moyObtenus, bsVenue.n, bsOther.moyObtenus, bsOther.n);
+      defense = wavg(bsVenue.moyConcedes, bsVenue.n, bsOther.moyConcedes, bsOther.n);
+      volatilite = wavg(bsVenue.volatilite, bsVenue.n, bsOther.volatilite, bsOther.n);
+      venueWeight = (venueSampleN / (venueSampleN + otherMatches.length)) * 100;
+    }
+  }
+
+  return { ppm, n: allButsMatches.length, formePoints, formeN, formeWindow, attaque, defense, volatilite, venueSampleN, venueWeight, venue };
 }
 
 /* Auto-détection du barème H2H à partir des confrontations directes déjà saisies dans
@@ -6159,19 +6201,23 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h }) {
   const [formeWindow, setFormeWindow] = useState(5);
   const [venue, setVenue] = useState("A"); // "A" = A à domicile, "N" = neutre, "B" = B à domicile
 
-  const inputsA = computeTeamFDRInputs(matchesA, formeWindow);
-  const inputsB = computeTeamFDRInputs(matchesB, formeWindow);
-  if (!inputsA && !inputsB) return null;
-
   const venueForA = venue === "A" ? "D" : venue === "B" ? "E" : "N";
   const venueForB = venue === "B" ? "D" : venue === "A" ? "E" : "N";
+  // PPM/forme/attaque/défense de chaque équipe calculés sur SON propre profil domicile
+  // ou extérieur (celui qu'elle aura dans CE match précis) quand il y a assez de matchs
+  // dans ce lieu — sinon repli automatique sur l'historique complet (voir
+  // computeTeamFDRInputs). Corrige le biais "PPG global" qui ignore l'avantage du terrain.
+  const inputsA = computeTeamFDRInputs(matchesA, formeWindow, venueForA);
+  const inputsB = computeTeamFDRInputs(matchesB, formeWindow, venueForB);
+  if (!inputsA && !inputsB) return null;
+
   const h2hA = computeH2hScore(h2h, "A");
   const h2hB = computeH2hScore(h2h, "B");
 
   const rA = inputsB ? computeFDR({ ppm: inputsB.ppm, forme: inputsB.formePoints, formeWindow, venueId: venueForA, h2hScore: h2hA.score }) : null;
   const rB = inputsA ? computeFDR({ ppm: inputsA.ppm, forme: inputsA.formePoints, formeWindow, venueId: venueForB, h2hScore: h2hB.score }) : null;
 
-  const Card = ({ name, color, r, missing }) => (
+  const Card = ({ name, color, r, missing, oppInputs }) => (
     <div style={{ flex: 1, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 10, padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
       <div style={{ fontSize: 10.5, color, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3 }}>Difficulté pour {name || "l'équipe"}</div>
       {missing ? (
@@ -6182,7 +6228,17 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h }) {
             <span style={{ fontFamily: FONT_DISPLAY, fontSize: 30, fontWeight: 800, color: r.band.color }}>{r.score.toFixed(2)}</span>
             <span style={{ fontSize: 11, fontWeight: 700, color: r.band.color }}>{r.band.emoji} {r.band.label}</span>
           </div>
-          <FDRRow label="Niveau adversaire" weight={FDR_WEIGHTS.adversaire} note={r.v1} contribution={r.v1 * FDR_WEIGHTS.adversaire} />
+          <FDRRow
+            label="Niveau adversaire"
+            sub={
+              oppInputs?.venueWeight !== null && oppInputs?.venueWeight !== undefined
+                ? `mélange pondéré : ${oppInputs.venueWeight.toFixed(0)}% ${oppInputs.venue === "D" ? "domicile" : "extérieur"} (${oppInputs.venueSampleN} matchs) / ${(100 - oppInputs.venueWeight).toFixed(0)}% reste`
+                : "PPM global (pas de match dans ce lieu précis pour distinguer)"
+            }
+            weight={FDR_WEIGHTS.adversaire}
+            note={r.v1}
+            contribution={r.v1 * FDR_WEIGHTS.adversaire}
+          />
           <FDRRow label="Forme adversaire" weight={FDR_WEIGHTS.forme} note={r.v2} contribution={r.v2 * FDR_WEIGHTS.forme} />
           <FDRRow label="Terrain" sub={FDR_VENUE_OPTIONS.find((o) => o.id === (color === C.teamA ? venueForA : venueForB))?.label} weight={FDR_WEIGHTS.terrain} note={r.v3} contribution={r.v3 * FDR_WEIGHTS.terrain} />
           <FDRRow
@@ -6235,8 +6291,8 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h }) {
         )}
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <Card name={teamAName} color={C.teamA} r={rA} missing={!inputsB} />
-          <Card name={teamBName} color={C.teamB} r={rB} missing={!inputsA} />
+          <Card name={teamAName} color={C.teamA} r={rA} missing={!inputsB} oppInputs={inputsB} />
+          <Card name={teamBName} color={C.teamB} r={rB} missing={!inputsA} oppInputs={inputsA} />
         </div>
 
         {rA && rB && (() => {
@@ -6285,6 +6341,9 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h }) {
                   attaque <b style={{ color: C.text }}>{inputsA.attaque.toFixed(2)}</b> buts/match · défense{" "}
                   <b style={{ color: C.text }}>{inputsA.defense.toFixed(2)}</b> encaissés/match
                 </div>
+                <div style={{ marginTop: 3 }}>
+                  <VolBadge vol={inputsA.volatilite} volSource="historique" labelFn={volatiliteButsLabel} />
+                </div>
               </div>
               <div style={{ flex: 1, minWidth: 140 }}>
                 <div style={{ fontSize: 10.5, color: C.teamB, fontWeight: 700 }}>{teamBName || "B"}</div>
@@ -6292,8 +6351,17 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h }) {
                   attaque <b style={{ color: C.text }}>{inputsB.attaque.toFixed(2)}</b> buts/match · défense{" "}
                   <b style={{ color: C.text }}>{inputsB.defense.toFixed(2)}</b> encaissés/match
                 </div>
+                <div style={{ marginTop: 3 }}>
+                  <VolBadge vol={inputsB.volatilite} volSource="historique" labelFn={volatiliteButsLabel} />
+                </div>
               </div>
             </div>
+            {(volatiliteButsLabel(inputsA.volatilite).label === "Forte" || volatiliteButsLabel(inputsB.volatilite).label === "Forte") && (
+              <div style={{ fontSize: 10.5, color: C.fragile, fontStyle: "italic" }}>
+                ⚠️ volatilité forte {volatiliteButsLabel(inputsA.volatilite).label === "Forte" && volatiliteButsLabel(inputsB.volatilite).label === "Forte" ? "des deux côtés" : `côté ${volatiliteButsLabel(inputsA.volatilite).label === "Forte" ? teamAName || "A" : teamBName || "B"}`} —
+                ses matchs alternent gros scores et rencontres fermées, donc la projection de buts ci-dessous est moins fiable qu'un chiffre isolé ne le laisse penser
+              </div>
+            )}
             {(() => {
               const proj = computeGoalsProjection(inputsA, inputsB);
               return (
