@@ -1237,12 +1237,16 @@ function computeStatSeries(matches, obtKey, concKey, alpha = 0.25) {
   let ewmaObtenus = null;
   let ewmaConcedes = null;
   const totals = [];
+  const obtenusArr = [];
+  const concedesArr = [];
   chronological.forEach((m) => {
     const o = num(m[obtKey]);
     const c = num(m[concKey]);
     sumObt += o;
     sumConc += c;
     totals.push(o + c);
+    obtenusArr.push(o);
+    concedesArr.push(c);
     const diff = o - c;
     ewma = ewma === null ? diff : alpha * diff + (1 - alpha) * ewma;
     ewmaObtenus = ewmaObtenus === null ? o : alpha * o + (1 - alpha) * ewmaObtenus;
@@ -1251,6 +1255,10 @@ function computeStatSeries(matches, obtKey, concKey, alpha = 0.25) {
   const n = chronological.length;
   const meanTotal = totals.reduce((s, t) => s + t, 0) / n;
   const variance = totals.reduce((s, t) => s + (t - meanTotal) ** 2, 0) / n;
+  // volatilité séparée marqués/encaissés — une équipe peut totaliser une volatilité
+  // "Faible" simplement parce que l'irrégularité de son attaque est compensée par la
+  // stabilité de sa défense (ou l'inverse) ; ces deux séries isolent chaque camp
+  const stdev = (arr, mean) => Math.sqrt(arr.reduce((s, v) => s + (v - mean) ** 2, 0) / arr.length);
   return {
     n,
     moyObtenus: sumObt / n,
@@ -1260,6 +1268,8 @@ function computeStatSeries(matches, obtKey, concKey, alpha = 0.25) {
     ewmaObtenus,
     ewmaConcedes,
     volatilite: Math.sqrt(variance),
+    volatiliteObtenus: stdev(obtenusArr, sumObt / n),
+    volatiliteConcedes: stdev(concedesArr, sumConc / n),
     totals,
   };
 }
@@ -5934,6 +5944,22 @@ function computeTeamFDRInputs(matches, formeWindow = 5, venue = null) {
   const formePoints = vndRecent ? vndRecent.vic * 3 + vndRecent.nul : null;
   const formeN = vndRecent ? vndRecent.n : 0;
 
+  // fréquence EMPIRIQUE de BTTS/Over sur les N derniers matchs (comptage réel, pas une
+  // moyenne théorique) — sert à vérifier si ce que prédit le modèle de Poisson (basé sur
+  // les moyennes) s'est VRAIMENT produit récemment ; un écart entre les deux est un
+  // signal d'alerte à part entière, indépendant de la volatilité
+  const bttsOccurrences = recent.filter((m) => num(m.butsObtenus) >= 1 && num(m.butsConcedes) >= 1).length;
+  const overOccurrences = recent.filter((m) => num(m.butsObtenus) + num(m.butsConcedes) > 2.5).length;
+
+  // clean sheet ou match sans marquer sur l'un des 3 DERNIERS matchs — signal ciblé et
+  // récent (indépendant de la fenêtre 5/6) : souvent le symptôme d'une équipe qui vient
+  // d'exploser un adversaire faible (et galère au match suivant) ou l'inverse
+  const last3 = allButsMatches.slice(0, 3);
+  const cleanSheetOrBlankMatch = last3.find((m) => num(m.butsConcedes) === 0 || num(m.butsObtenus) === 0);
+  const cleanSheetOrBlank = cleanSheetOrBlankMatch
+    ? { date: cleanSheetOrBlankMatch.date, type: num(cleanSheetOrBlankMatch.butsConcedes) === 0 && num(cleanSheetOrBlankMatch.butsObtenus) === 0 ? "0-0" : num(cleanSheetOrBlankMatch.butsConcedes) === 0 ? "clean sheet" : "sans marquer", score: `${cleanSheetOrBlankMatch.butsObtenus}-${cleanSheetOrBlankMatch.butsConcedes}` }
+    : null;
+
   const vndAll = computeVND(allButsMatches, "butsObtenus", "butsConcedes");
   if (!vndAll) return null;
   const butsSeriesAll = computeStatSeries(allButsMatches, "butsObtenus", "butsConcedes", 0.25);
@@ -5949,6 +5975,8 @@ function computeTeamFDRInputs(matches, formeWindow = 5, venue = null) {
   let attaque = butsSeriesAll.moyObtenus;
   let defense = butsSeriesAll.moyConcedes;
   let volatilite = butsSeriesAll.volatilite;
+  let volatiliteAttaque = butsSeriesAll.volatiliteObtenus;
+  let volatiliteDefense = butsSeriesAll.volatiliteConcedes;
   let venueSampleN = 0;
   let venueWeight = null;
 
@@ -5966,11 +5994,13 @@ function computeTeamFDRInputs(matches, formeWindow = 5, venue = null) {
       attaque = wavg(bsVenue.moyObtenus, bsVenue.n, bsOther.moyObtenus, bsOther.n);
       defense = wavg(bsVenue.moyConcedes, bsVenue.n, bsOther.moyConcedes, bsOther.n);
       volatilite = wavg(bsVenue.volatilite, bsVenue.n, bsOther.volatilite, bsOther.n);
+      volatiliteAttaque = wavg(bsVenue.volatiliteObtenus, bsVenue.n, bsOther.volatiliteObtenus, bsOther.n);
+      volatiliteDefense = wavg(bsVenue.volatiliteConcedes, bsVenue.n, bsOther.volatiliteConcedes, bsOther.n);
       venueWeight = (venueSampleN / (venueSampleN + otherMatches.length)) * 100;
     }
   }
 
-  return { ppm, n: allButsMatches.length, formePoints, formeN, formeWindow, attaque, defense, volatilite, venueSampleN, venueWeight, venue };
+  return { ppm, n: allButsMatches.length, formePoints, formeN, formeWindow, attaque, defense, volatilite, volatiliteAttaque, volatiliteDefense, venueSampleN, venueWeight, venue, bttsOccurrences, overOccurrences, cleanSheetOrBlank };
 }
 
 /* Auto-détection du barème H2H à partir des confrontations directes déjà saisies dans
@@ -6197,6 +6227,26 @@ function StrategyConvergence({ teamAName, teamBName, proj }) {
   );
 }
 
+/* Volatilité affichée en 3 axes séparés — le total seul peut cacher un déséquilibre :
+   une attaque irrégulière peut être compensée par une défense stable (ou l'inverse) dans
+   le total du match, alors que ça reste un vrai signal pour BTTS/Over pris séparément. */
+function VolBadgeTrio({ vTotal, vAttaque, vDefense }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 4 }}>
+      {[
+        { label: "total", v: vTotal },
+        { label: "attaque", v: vAttaque },
+        { label: "défense", v: vDefense },
+      ].map((row) => (
+        <div key={row.label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 9.5, color: C.faint, width: 42, flexShrink: 0 }}>{row.label}</span>
+          <VolBadge vol={row.v} volSource="historique" labelFn={volatiliteButsLabel} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h }) {
   const [formeWindow, setFormeWindow] = useState(5);
   const [venue, setVenue] = useState("A"); // "A" = A à domicile, "N" = neutre, "B" = B à domicile
@@ -6342,7 +6392,7 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h }) {
                   <b style={{ color: C.text }}>{inputsA.defense.toFixed(2)}</b> encaissés/match
                 </div>
                 <div style={{ marginTop: 3 }}>
-                  <VolBadge vol={inputsA.volatilite} volSource="historique" labelFn={volatiliteButsLabel} />
+                  <VolBadgeTrio vTotal={inputsA.volatilite} vAttaque={inputsA.volatiliteAttaque} vDefense={inputsA.volatiliteDefense} />
                 </div>
               </div>
               <div style={{ flex: 1, minWidth: 140 }}>
@@ -6352,7 +6402,7 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h }) {
                   <b style={{ color: C.text }}>{inputsB.defense.toFixed(2)}</b> encaissés/match
                 </div>
                 <div style={{ marginTop: 3 }}>
-                  <VolBadge vol={inputsB.volatilite} volSource="historique" labelFn={volatiliteButsLabel} />
+                  <VolBadgeTrio vTotal={inputsB.volatilite} vAttaque={inputsB.volatiliteAttaque} vDefense={inputsB.volatiliteDefense} />
                 </div>
               </div>
             </div>
@@ -6362,6 +6412,41 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h }) {
                 ses matchs alternent gros scores et rencontres fermées, donc la projection de buts ci-dessous est moins fiable qu'un chiffre isolé ne le laisse penser
               </div>
             )}
+
+            <div style={{ borderTop: `1px dashed ${C.line}`, paddingTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ fontSize: 9.5, color: C.faint }}>fréquence RÉELLE (comptage, pas une moyenne) sur les {formeWindow} derniers matchs de chaque équipe</div>
+              <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 11, color: C.dim }}>
+                <span>
+                  {teamAName || "A"} — BTTS <b style={{ color: inputsA.bttsOccurrences / (inputsA.formeN || 1) < 0.66 ? C.fragile : C.solide }}>{inputsA.bttsOccurrences}/{inputsA.formeN}</b> · Over 2.5{" "}
+                  <b style={{ color: C.text }}>{inputsA.overOccurrences}/{inputsA.formeN}</b>
+                </span>
+                <span>
+                  {teamBName || "B"} — BTTS <b style={{ color: inputsB.bttsOccurrences / (inputsB.formeN || 1) < 0.66 ? C.fragile : C.solide }}>{inputsB.bttsOccurrences}/{inputsB.formeN}</b> · Over 2.5{" "}
+                  <b style={{ color: C.text }}>{inputsB.overOccurrences}/{inputsB.formeN}</b>
+                </span>
+              </div>
+              {(inputsA.formeN > 0 && inputsA.bttsOccurrences / inputsA.formeN < 0.66) || (inputsB.formeN > 0 && inputsB.bttsOccurrences / inputsB.formeN < 0.66) ? (
+                <div style={{ fontSize: 10.5, color: C.fragile, fontStyle: "italic" }}>
+                  ⚠️ BTTS réalisé moins de 2 fois sur 3 récemment {(() => {
+                    const aLow = inputsA.formeN > 0 && inputsA.bttsOccurrences / inputsA.formeN < 0.66;
+                    const bLow = inputsB.formeN > 0 && inputsB.bttsOccurrences / inputsB.formeN < 0.66;
+                    return aLow && bLow ? `(${teamAName || "A"} et ${teamBName || "B"})` : `(${aLow ? teamAName || "A" : teamBName || "B"})`;
+                  })()} — le Poisson au-dessus se base sur une moyenne, cette fréquence dit ce qui s'est vraiment passé
+                </div>
+              ) : null}
+              {(inputsA.cleanSheetOrBlank || inputsB.cleanSheetOrBlank) && (
+                <div style={{ fontSize: 10.5, color: C.jouable, fontStyle: "italic" }}>
+                  ⚠️ {inputsA.cleanSheetOrBlank && (
+                    <>{teamAName || "A"} : {inputsA.cleanSheetOrBlank.type} ({inputsA.cleanSheetOrBlank.score}{inputsA.cleanSheetOrBlank.date ? `, ${inputsA.cleanSheetOrBlank.date}` : ""}) dans ses 3 derniers. </>
+                  )}
+                  {inputsB.cleanSheetOrBlank && (
+                    <>{teamBName || "B"} : {inputsB.cleanSheetOrBlank.type} ({inputsB.cleanSheetOrBlank.score}{inputsB.cleanSheetOrBlank.date ? `, ${inputsB.cleanSheetOrBlank.date}` : ""}) dans ses 3 derniers. </>
+                  )}
+                  possible signe d'un déséquilibre ponctuel (adversaire très faible affronté, ou passage à vide) — vérifie le contexte avant de jouer BTTS
+                </div>
+              )}
+            </div>
+
             {(() => {
               const proj = computeGoalsProjection(inputsA, inputsB);
               return (
