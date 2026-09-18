@@ -6166,6 +6166,25 @@ function computePoissonMarket(xA, xB, maxGoals = 8) {
    Règle 1 (VN+BTTS) exige un favori identique sur les 2 sites externes. Règle 2
    (BTTS+Over) ne dépend PAS d'un favori — elle s'applique même quand les 2 sites ne sont
    pas d'accord sur le favori, ce qui correspond exactement à l'usage décrit. */
+/* Classification du contexte FDR — fonction PURE, réutilisable à l'ajout d'un pari ET
+   pour recalculer rétroactivement le Bilan à partir des scores bruts stockés. Comme ça,
+   si la logique change encore un jour, tout l'historique se reclasse automatiquement
+   avec la nouvelle version, sans que l'utilisateur ait à recommencer son suivi.
+   3 cas de base : deux difficiles, deux faciles, écart net (notre cas spécial). Le reste
+   ("équilibré") se subdivise en 3 sous-cas selon le milieu de l'échelle (3.0) :
+   eq_bas (les deux <3.0), eq_haut (les deux >=3.0), eq_mixte (un de chaque côté). */
+function classifyFdrPattern(scoreA, scoreB) {
+  const isHard = (s) => s >= 3.4;
+  const isEasy = (s) => s < 2.6;
+  const bothHard = isHard(scoreA) && isHard(scoreB);
+  const bothEasy = isEasy(scoreA) && isEasy(scoreB);
+  const clearGap = (isEasy(scoreA) && isHard(scoreB)) || (isHard(scoreA) && isEasy(scoreB));
+  const FDR_MID = 3.0;
+  const isLowerHalf = (s) => s < FDR_MID;
+  const equilibreSousCas = isLowerHalf(scoreA) && isLowerHalf(scoreB) ? "eq_bas" : !isLowerHalf(scoreA) && !isLowerHalf(scoreB) ? "eq_haut" : "eq_mixte";
+  return bothHard ? "deux_difficiles" : bothEasy ? "deux_faciles" : clearGap ? "ecart_net" : equilibreSousCas;
+}
+
 function StrategyConvergence({ teamAName, teamBName, proj, rA, rB, inputsA, inputsB, onAddBet }) {
   const [tcFavori, setTcFavori] = useState(null); // "A" | "B" | null
   const [fsFavori, setFsFavori] = useState(null);
@@ -6180,26 +6199,9 @@ function StrategyConvergence({ teamAName, teamBName, proj, rA, rB, inputsA, inpu
   const rule2 = proj.bttsLikely && proj.overLikely && tcOver && fsOverBtts;
   const verdict = rule1 ? { text: `Joue VN ${favoriTeamName} + BTTS`, color: C.solide } : rule2 ? { text: "Joue BTTS + Over 2.5", color: C.solide } : null;
 
-  // contexte FDR figé au moment de l'ajout au bilan — sert plus tard à filtrer
-  // l'historique par "est-ce que le vert/rouge FDR corrèle vraiment avec mes résultats"
-  // 3 cas de base INCHANGÉS (dont "ecart_net", notre cas spécial) : deux difficiles, deux
-  // faciles, écart net, ou équilibré (le reste). Le découpage au milieu de l'échelle (3.0)
-  // s'applique UNIQUEMENT à l'intérieur du bucket "équilibré", en 3 sous-cas simples (pas
-  // de 4e catégorie "les deux dans le jaune" séparée — un test réel a montré qu'elle
-  // avalait la plupart des paris équilibrés sans distinguer moitié basse/haute, alors que
-  // c'est justement cette distinction bas/haut qui portait le signal) :
-  //   - eq_bas   : les deux équipes sous 3.0 (moitié basse du jaune)
-  //   - eq_haut  : les deux équipes à 3.0 ou plus (moitié haute du jaune)
-  //   - eq_mixte : une équipe de chaque côté du milieu
-  const isHard = (r) => r.score >= 3.4;
-  const isEasy = (r) => r.score < 2.6;
-  const bothHard = isHard(rA) && isHard(rB);
-  const bothEasy = isEasy(rA) && isEasy(rB);
-  const clearGap = (isEasy(rA) && isHard(rB)) || (isHard(rA) && isEasy(rB));
-  const FDR_MID = 3.0;
-  const isLowerHalf = (r) => r.score < FDR_MID;
-  const equilibreSousCas = isLowerHalf(rA) && isLowerHalf(rB) ? "eq_bas" : !isLowerHalf(rA) && !isLowerHalf(rB) ? "eq_haut" : "eq_mixte";
-  const fdrPattern = bothHard ? "deux_difficiles" : bothEasy ? "deux_faciles" : clearGap ? "ecart_net" : equilibreSousCas;
+  // contexte FDR figé au moment de l'ajout au bilan — voir classifyFdrPattern (fonction
+  // partagée, aussi utilisée pour recalculer rétroactivement le Bilan)
+  const fdrPattern = classifyFdrPattern(rA.score, rB.score);
   const volLabelA = volatiliteButsLabel(inputsA.volatilite).label;
   const volLabelB = volatiliteButsLabel(inputsB.volatilite).label;
   const volatiliteWorst = volLabelA === "Forte" || volLabelB === "Forte" ? "Forte" : volLabelA === "Moyenne" || volLabelB === "Moyenne" ? "Moyenne" : "Faible";
@@ -6929,11 +6931,9 @@ export default function App() {
     // anciens noms (deux_difficiles/deux_faciles/equilibre) gardés dans le libellé pour
     // que les paris déjà trackés avant ce changement restent lisibles dans le Bilan —
     // seuls les NOUVEAUX paris utiliseront la classification à 4 cas ci-dessous
-    // anciens noms d'avant ce découpage restent affichables pour les paris déjà trackés
-    // (equilibre = avant tout découpage, eq_deux_jaune = version intermédiaire à 4 sous-cas
-    // qui masquait trop le signal bas/haut) ; les nouveaux paris "équilibrés" utilisent
-    // désormais un des 3 sous-cas eq_bas/eq_haut/eq_mixte, sans toucher aux 3 autres cas de
-    // base (difficiles/faciles/écart net)
+    // tous les paris (y compris les anciens) sont reclassés avec la logique actuelle via
+    // classifyFdrPattern — seuls ces 6 libellés existent désormais, plus "equilibre" en
+    // repli pour d'éventuels très anciens paris sans scores bruts stockés
     const fdrPatternLabels = {
       deux_faciles: "🟢 Deux équipes faciles",
       ecart_net: "↔️ Écart net",
@@ -6941,17 +6941,20 @@ export default function App() {
       eq_mixte: "⚪↕️ Équilibré, mixte",
       eq_haut: "⚪🔴 Équilibré, tirant haut",
       deux_difficiles: "🔴 Deux équipes difficiles",
-      equilibre: "⚪ Équilibré (avant tout découpage)",
-      eq_deux_jaune: "⚪🟡 Équilibré, les deux dans le jaune (version intermédiaire)",
-      eq_deux_bas: "⚪🟢 Équilibré, tirant bas (version intermédiaire)",
-      eq_deux_haut: "⚪🔴 Équilibré, tirant haut (version intermédiaire)",
+      equilibre: "⚪ Équilibré (score brut manquant)",
     };
-    const fdrPatternOrder = { deux_faciles: 0, ecart_net: 1, eq_bas: 2, eq_mixte: 3, eq_haut: 4, deux_difficiles: 5, equilibre: 6, eq_deux_jaune: 7, eq_deux_bas: 8, eq_deux_haut: 9 };
+    // pattern RECALCULÉ à partir des scores bruts stockés (fdrScoreA/fdrScoreB), pas de
+    // l'étiquette figée à l'ajout — ainsi tout l'historique se reclasse automatiquement
+    // avec la logique actuelle de classifyFdrPattern, même les paris ajoutés avant un
+    // changement de logique ; repli sur l'étiquette stockée seulement si les scores bruts
+    // manquent (très anciens paris, avant qu'on les stocke)
+    const fdrPatternOrder = { deux_faciles: 0, ecart_net: 1, eq_bas: 2, eq_mixte: 3, eq_haut: 4, deux_difficiles: 5 };
     const byFdrPattern = {};
     resolved.forEach((b) => {
-      if (!b.fdrPattern) return;
-      if (!byFdrPattern[b.fdrPattern]) byFdrPattern[b.fdrPattern] = { won: 0, lost: 0, push: 0 };
-      byFdrPattern[b.fdrPattern][b.result === "won" ? "won" : b.result === "lost" ? "lost" : "push"]++;
+      const pattern = b.fdrScoreA !== undefined && b.fdrScoreB !== undefined ? classifyFdrPattern(b.fdrScoreA, b.fdrScoreB) : b.fdrPattern;
+      if (!pattern) return;
+      if (!byFdrPattern[pattern]) byFdrPattern[pattern] = { won: 0, lost: 0, push: 0 };
+      byFdrPattern[pattern][b.result === "won" ? "won" : b.result === "lost" ? "lost" : "push"]++;
     });
     const fdrPatterns = Object.entries(byFdrPattern)
       .map(([pattern, c]) => {
