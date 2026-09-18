@@ -6069,6 +6069,9 @@ function FdrGaugeBar({ teamAName, teamAScore, teamAColor, teamBName, teamBScore,
             <div key={b.label} style={{ flex: 1, background: b.color }} />
           ))}
         </div>
+        {/* repère du milieu de l'échelle (3.0) — sépare les deux moitiés utilisées pour
+            le contexte FDR "deux_bas"/"deux_haut" dans le Bilan */}
+        <div style={{ position: "absolute", left: "50%", top: 0, bottom: 0, width: 2, background: C.bg, opacity: 0.9, transform: "translateX(-50%)" }} />
         {teamBScore !== null && teamBScore !== undefined && (
           <div style={{ position: "absolute", left: `${pct(teamBScore)}%`, top: "100%", transform: "translateX(-50%)", display: "flex", flexDirection: "column-reverse", alignItems: "center", marginTop: 2 }}>
             <span style={{ fontSize: 9, fontWeight: 700, color: teamBColor, whiteSpace: "nowrap" }}>{teamBName || "B"} {teamBScore.toFixed(2)}</span>
@@ -6179,9 +6182,32 @@ function StrategyConvergence({ teamAName, teamBName, proj, rA, rB, inputsA, inpu
 
   // contexte FDR figé au moment de l'ajout au bilan — sert plus tard à filtrer
   // l'historique par "est-ce que le vert/rouge FDR corrèle vraiment avec mes résultats"
+  // "ecart_net" = notre cas spécial existant (une équipe franchement facile <2.6 face à
+  // une équipe franchement difficile >=3.4) — INCHANGÉ, prioritaire sur tout le reste.
+  // Les 4 nouveaux cas ci-dessous découpent le reste selon le MILIEU de la barre (3.0,
+  // le centre de l'échelle 1.0-5.0) plutôt que les seuils Facile/Difficile :
+  //   - deux_bas   : les deux équipes sous 3.0 (vert + moitié basse du jaune/orange)
+  //   - deux_haut  : les deux équipes à 3.0 ou plus (moitié haute du jaune/orange + rouge + violet)
+  //   - deux_jaune : les deux équipes dans la bande "Équilibré" (2.6 à 3.4) — priorité sur
+  //                  deux_bas/deux_haut, capture spécifiquement le cas où les deux sont
+  //                  proches du 50/50, peu importe de quel côté du milieu elles tombent
+  //   - mixte      : une équipe de chaque côté du milieu, sans que ce soit un "écart net"
+  //                  au sens strict (donc pas déjà classé ecart_net)
   const isHard = (r) => r.score >= 3.4;
   const isEasy = (r) => r.score < 2.6;
-  const fdrPattern = isHard(rA) && isHard(rB) ? "deux_difficiles" : isEasy(rA) && isEasy(rB) ? "deux_faciles" : (isEasy(rA) && isHard(rB)) || (isHard(rA) && isEasy(rB)) ? "ecart_net" : "equilibre";
+  const clearGap = (isEasy(rA) && isHard(rB)) || (isHard(rA) && isEasy(rB));
+  const FDR_MID = 3.0;
+  const isLowerHalf = (r) => r.score < FDR_MID;
+  const isYellowBand = (r) => r.score >= 2.6 && r.score < 3.4;
+  const fdrPattern = clearGap
+    ? "ecart_net"
+    : isYellowBand(rA) && isYellowBand(rB)
+    ? "deux_jaune"
+    : isLowerHalf(rA) && isLowerHalf(rB)
+    ? "deux_bas"
+    : !isLowerHalf(rA) && !isLowerHalf(rB)
+    ? "deux_haut"
+    : "mixte";
   const volLabelA = volatiliteButsLabel(inputsA.volatilite).label;
   const volLabelB = volatiliteButsLabel(inputsB.volatilite).label;
   const volatiliteWorst = volLabelA === "Forte" || volLabelB === "Forte" ? "Forte" : volLabelA === "Moyenne" || volLabelB === "Moyenne" ? "Moyenne" : "Faible";
@@ -6908,8 +6934,20 @@ export default function App() {
     // net / équilibré) — capturé au moment de l'ajout au bilan (bouton du panneau FDR) —
     // répond à "est-ce que le code couleur FDR corrèle vraiment avec mes résultats, sur
     // plus que 2-3 matchs jugés au cas par cas"
-    const fdrPatternLabels = { deux_difficiles: "🔴 Deux équipes difficiles", deux_faciles: "🟢 Deux équipes faciles", ecart_net: "↔️ Écart net", equilibre: "⚪ Équilibré" };
-    const fdrPatternOrder = { deux_faciles: 0, ecart_net: 1, equilibre: 2, deux_difficiles: 3 };
+    // anciens noms (deux_difficiles/deux_faciles/equilibre) gardés dans le libellé pour
+    // que les paris déjà trackés avant ce changement restent lisibles dans le Bilan —
+    // seuls les NOUVEAUX paris utiliseront la classification à 4 cas ci-dessous
+    const fdrPatternLabels = {
+      ecart_net: "↔️ Écart net (cas spécial, inchangé)",
+      deux_bas: "🟢 Les deux sous le milieu (vert + moitié basse)",
+      deux_haut: "🔴 Les deux au-dessus du milieu (moitié haute + rouge + violet)",
+      deux_jaune: "🟡 Les deux dans la bande Équilibré",
+      mixte: "↕️ Une de chaque côté du milieu (sans être un écart net)",
+      deux_difficiles: "🔴 Deux équipes difficiles (ancien classement)",
+      deux_faciles: "🟢 Deux équipes faciles (ancien classement)",
+      equilibre: "⚪ Équilibré (ancien classement)",
+    };
+    const fdrPatternOrder = { deux_bas: 0, ecart_net: 1, deux_jaune: 2, mixte: 3, deux_haut: 4, deux_faciles: 5, equilibre: 6, deux_difficiles: 7 };
     const byFdrPattern = {};
     resolved.forEach((b) => {
       if (!b.fdrPattern) return;
