@@ -3002,6 +3002,11 @@ function TeamProfileForm({ team, setTeam, color, label }) {
                   <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic", marginBottom: 2 }}>
                     calculé automatiquement depuis les buts déjà saisis (Forebet) — le lieu et les confrontations directes se combinent dans le Comparateur pour donner le score FDR complet
                   </div>
+                  {fdrInputs.suspiciousMatches.length > 0 && (
+                    <div style={{ padding: "6px 8px", borderRadius: 6, background: C.fragile + "18", border: `1px solid ${C.fragile}55`, fontSize: 10, color: C.fragile, marginBottom: 4 }}>
+                      🚫 écarté du calcul (score improbable, plus de 12 buts d'un camp) : {fdrInputs.suspiciousMatches.map((m) => `${m.score}${m.date ? ` (${m.date})` : ""}`).join(", ")} — va corriger cette ligne dans le panneau Forebet ci-dessus.
+                    </div>
+                  )}
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                     <span>
                       PPM saison : <b style={{ color: C.text }}>{fdrInputs.ppm !== null ? fdrInputs.ppm.toFixed(2) : "—"}</b>{" "}
@@ -5936,10 +5941,22 @@ function computeTeamFDRInputs(matches, formeWindow = 5, venue = null) {
   const allButsMatches = (matches || []).filter((m) => m.forebetTouched === true && m.butsObtenus !== "" && m.butsObtenus !== undefined && m.butsConcedes !== "" && m.butsConcedes !== undefined);
   if (!allButsMatches.length) return null;
 
+  // garde-fou anti-saisie erronée : aucun match pro n'a jamais eu 12+ buts d'un seul
+  // camp — au-delà, c'est presque toujours une valeur tapée dans le mauvais champ (ex.
+  // un chiffre d'attaques dangereuses collé dans "buts conc.") plutôt qu'un vrai score.
+  // Sans ce filtre, une seule ligne erronée peut faire exploser la moyenne et donc toute
+  // la projection de buts en aval (Poisson compris) sans qu'aucun message n'alerte.
+  const GOALS_SANITY_MAX = 12;
+  const suspiciousMatches = allButsMatches
+    .filter((m) => num(m.butsObtenus) > GOALS_SANITY_MAX || num(m.butsConcedes) > GOALS_SANITY_MAX)
+    .map((m) => ({ date: m.date, score: `${m.butsObtenus}-${m.butsConcedes}` }));
+  const sanitizedMatches = allButsMatches.filter((m) => num(m.butsObtenus) <= GOALS_SANITY_MAX && num(m.butsConcedes) <= GOALS_SANITY_MAX);
+  if (!sanitizedMatches.length) return null;
+
   // forme récente : toujours sur les N derniers matchs TOUTES VENUES confondues — la
   // forme/momentum n'est pas vraiment un phénomène domicile/extérieur, et filtrer par
   // lieu réduirait trop l'échantillon récent pour rester représentatif du moment présent
-  const recent = allButsMatches.slice(0, formeWindow);
+  const recent = sanitizedMatches.slice(0, formeWindow);
   const vndRecent = computeVND(recent, "butsObtenus", "butsConcedes");
   const formePoints = vndRecent ? vndRecent.vic * 3 + vndRecent.nul : null;
   const formeN = vndRecent ? vndRecent.n : 0;
@@ -5954,15 +5971,15 @@ function computeTeamFDRInputs(matches, formeWindow = 5, venue = null) {
   // clean sheet ou match sans marquer sur l'un des 3 DERNIERS matchs — signal ciblé et
   // récent (indépendant de la fenêtre 5/6) : souvent le symptôme d'une équipe qui vient
   // d'exploser un adversaire faible (et galère au match suivant) ou l'inverse
-  const last3 = allButsMatches.slice(0, 3);
+  const last3 = sanitizedMatches.slice(0, 3);
   const cleanSheetOrBlankMatch = last3.find((m) => num(m.butsConcedes) === 0 || num(m.butsObtenus) === 0);
   const cleanSheetOrBlank = cleanSheetOrBlankMatch
     ? { date: cleanSheetOrBlankMatch.date, type: num(cleanSheetOrBlankMatch.butsConcedes) === 0 && num(cleanSheetOrBlankMatch.butsObtenus) === 0 ? "0-0" : num(cleanSheetOrBlankMatch.butsConcedes) === 0 ? "clean sheet" : "sans marquer", score: `${cleanSheetOrBlankMatch.butsObtenus}-${cleanSheetOrBlankMatch.butsConcedes}` }
     : null;
 
-  const vndAll = computeVND(allButsMatches, "butsObtenus", "butsConcedes");
+  const vndAll = computeVND(sanitizedMatches, "butsObtenus", "butsConcedes");
   if (!vndAll) return null;
-  const butsSeriesAll = computeStatSeries(allButsMatches, "butsObtenus", "butsConcedes", 0.25);
+  const butsSeriesAll = computeStatSeries(sanitizedMatches, "butsObtenus", "butsConcedes", 0.25);
 
   // PPM/attaque/défense/volatilité : MÉLANGE pondéré par taille d'échantillon entre le
   // profil domicile/extérieur de cette équipe (celui qu'elle aura dans CE match précis)
@@ -5981,8 +5998,8 @@ function computeTeamFDRInputs(matches, formeWindow = 5, venue = null) {
   let venueWeight = null;
 
   if (venue && venue !== "N") {
-    const venueMatches = allButsMatches.filter((m) => m.lieu === venue);
-    const otherMatches = allButsMatches.filter((m) => m.lieu !== venue);
+    const venueMatches = sanitizedMatches.filter((m) => m.lieu === venue);
+    const otherMatches = sanitizedMatches.filter((m) => m.lieu !== venue);
     venueSampleN = venueMatches.length;
     if (venueSampleN >= 1 && otherMatches.length >= 1) {
       const vndVenue = computeVND(venueMatches, "butsObtenus", "butsConcedes");
@@ -6000,7 +6017,7 @@ function computeTeamFDRInputs(matches, formeWindow = 5, venue = null) {
     }
   }
 
-  return { ppm, n: allButsMatches.length, formePoints, formeN, formeWindow, attaque, defense, volatilite, volatiliteAttaque, volatiliteDefense, venueSampleN, venueWeight, venue, bttsOccurrences, overOccurrences, cleanSheetOrBlank };
+  return { ppm, n: sanitizedMatches.length, formePoints, formeN, formeWindow, attaque, defense, volatilite, volatiliteAttaque, volatiliteDefense, venueSampleN, venueWeight, venue, bttsOccurrences, overOccurrences, cleanSheetOrBlank, suspiciousMatches };
 }
 
 /* Auto-détection du barème H2H à partir des confrontations directes déjà saisies dans
@@ -6350,15 +6367,17 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h }) {
           // "Très facile"/"Abordable", score < 2.6. Deux équipes toutes deux étiquetées
           // difficiles l'une pour l'autre = choc entre deux équipes fortes en même temps
           // — historiquement plus fermé (chacune craint de perdre plus qu'elle ne cherche
-          // à gagner), à l'inverse d'un écart net qui tend à ouvrir le score (le favori
-          // concède quand même, l'outsider marque aussi). Observation empirique de
-          // l'utilisateur (2 matchs, échantillon faible) — affiché comme repère, pas
-          // comme une correction du calcul.
+          // à gagner). Inversement, deux équipes toutes deux "faciles" l'une pour l'autre
+          // (souvent deux équipes plus faibles/moyennes, défenses plus perméables des deux
+          // côtés) tendent à l'inverse à être plus ouvertes en buts — comme un écart net.
+          // Observations empiriques de l'utilisateur (échantillon encore faible) — affiché
+          // comme repère, pas comme une correction du calcul.
           const isHard = (r) => r.score >= 3.4;
           const isEasy = (r) => r.score < 2.6;
           const bothHard = isHard(rA) && isHard(rB);
+          const bothEasy = isEasy(rA) && isEasy(rB);
           const clearGap = (isEasy(rA) && isHard(rB)) || (isHard(rA) && isEasy(rB));
-          if (!bothHard && !clearGap) return null;
+          if (!bothHard && !bothEasy && !clearGap) return null;
           return (
             <div
               style={{
@@ -6372,6 +6391,8 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h }) {
             >
               {bothHard ? (
                 <>⚠️ Choc entre deux équipes fortes ({teamAName || "A"} et {teamBName || "B"} sont toutes les deux "Difficile" l'une pour l'autre) — ces matchs sont historiquement plus fermés que ce que suggèrent l'attaque/défense seules ; prudence sur BTTS/Over ci-dessous.</>
+              ) : bothEasy ? (
+                <>ℹ️ {teamAName || "A"} et {teamBName || "B"} sont toutes les deux "Facile/Abordable" l'une pour l'autre — ces matchs tendent à être plus ouverts en buts (souvent deux équipes plus faibles/moyennes en face à face), cohérent avec BTTS/Over ci-dessous.</>
               ) : (
                 <>ℹ️ Écart de FDR net entre les deux équipes — ces matchs ont tendance à être plus ouverts en buts (le favori concède quand même, l'outsider marque aussi), à garder en tête en lisant BTTS/Over ci-dessous.</>
               )}
@@ -6384,6 +6405,14 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h }) {
             <div style={{ fontSize: 10, color: C.faint, textTransform: "uppercase", letterSpacing: 0.4 }}>
               Attaque / défense séparées — pour BTTS et Over/Under (le score FDR ci-dessus reste pensé pour le 1X2)
             </div>
+            {(inputsA.suspiciousMatches.length > 0 || inputsB.suspiciousMatches.length > 0) && (
+              <div style={{ padding: "8px 10px", borderRadius: 8, background: C.fragile + "18", border: `1px solid ${C.fragile}55`, fontSize: 10.5, color: C.fragile }}>
+                🚫 valeur(s) suspecte(s) écartée(s) du calcul —{" "}
+                {inputsA.suspiciousMatches.length > 0 && <>{teamAName || "A"} : {inputsA.suspiciousMatches.map((m) => `${m.score}${m.date ? ` (${m.date})` : ""}`).join(", ")}. </>}
+                {inputsB.suspiciousMatches.length > 0 && <>{teamBName || "B"} : {inputsB.suspiciousMatches.map((m) => `${m.score}${m.date ? ` (${m.date})` : ""}`).join(", ")}. </>}
+                un score avec plus de 12 buts d'un camp est presque toujours une erreur de saisie (chiffre tapé dans le mauvais champ) — va corriger cette ligne dans le panneau Forebet.
+              </div>
+            )}
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               <div style={{ flex: 1, minWidth: 140 }}>
                 <div style={{ fontSize: 10.5, color: C.teamA, fontWeight: 700 }}>{teamAName || "A"}</div>
