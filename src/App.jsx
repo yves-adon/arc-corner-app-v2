@@ -6193,21 +6193,29 @@ function StrategyConvergence({ teamAName, teamBName, proj, rA, rB, inputsA, inpu
   //                  proches du 50/50, peu importe de quel côté du milieu elles tombent
   //   - mixte      : une équipe de chaque côté du milieu, sans que ce soit un "écart net"
   //                  au sens strict (donc pas déjà classé ecart_net)
+  // contexte FDR figé au moment de l'ajout au bilan — sert plus tard à filtrer
+  // l'historique par "est-ce que le vert/rouge FDR corrèle vraiment avec mes résultats"
+  // 4 cas de base INCHANGÉS (dont "ecart_net", notre cas spécial) : deux difficiles, deux
+  // faciles, écart net, ou équilibré (le reste). Le découpage à 4 sous-cas (au milieu de
+  // l'échelle, 3.0) s'applique UNIQUEMENT à l'intérieur du bucket "équilibré" — le but est
+  // de voir, PARMI les équilibrés, lesquels gagnent le plus, pas de redéfinir les 3 autres
+  // cas qui restent exactement comme avant.
   const isHard = (r) => r.score >= 3.4;
   const isEasy = (r) => r.score < 2.6;
+  const bothHard = isHard(rA) && isHard(rB);
+  const bothEasy = isEasy(rA) && isEasy(rB);
   const clearGap = (isEasy(rA) && isHard(rB)) || (isHard(rA) && isEasy(rB));
   const FDR_MID = 3.0;
   const isLowerHalf = (r) => r.score < FDR_MID;
   const isYellowBand = (r) => r.score >= 2.6 && r.score < 3.4;
-  const fdrPattern = clearGap
-    ? "ecart_net"
-    : isYellowBand(rA) && isYellowBand(rB)
-    ? "deux_jaune"
+  const equilibreSousCas = isYellowBand(rA) && isYellowBand(rB)
+    ? "eq_deux_jaune"
     : isLowerHalf(rA) && isLowerHalf(rB)
-    ? "deux_bas"
+    ? "eq_deux_bas"
     : !isLowerHalf(rA) && !isLowerHalf(rB)
-    ? "deux_haut"
-    : "mixte";
+    ? "eq_deux_haut"
+    : "eq_mixte";
+  const fdrPattern = bothHard ? "deux_difficiles" : bothEasy ? "deux_faciles" : clearGap ? "ecart_net" : equilibreSousCas;
   const volLabelA = volatiliteButsLabel(inputsA.volatilite).label;
   const volLabelB = volatiliteButsLabel(inputsB.volatilite).label;
   const volatiliteWorst = volLabelA === "Forte" || volLabelB === "Forte" ? "Forte" : volLabelA === "Moyenne" || volLabelB === "Moyenne" ? "Moyenne" : "Faible";
@@ -6937,17 +6945,21 @@ export default function App() {
     // anciens noms (deux_difficiles/deux_faciles/equilibre) gardés dans le libellé pour
     // que les paris déjà trackés avant ce changement restent lisibles dans le Bilan —
     // seuls les NOUVEAUX paris utiliseront la classification à 4 cas ci-dessous
+    // "equilibre" (ancien nom, avant ce découpage) reste affichable pour les paris déjà
+    // trackés avant ce changement ; les nouveaux paris "équilibrés" utilisent désormais un
+    // des 4 sous-cas ci-dessous (eq_*) à la place, pour voir PARMI les équilibrés lesquels
+    // gagnent le plus, sans toucher aux 3 autres cas de base (difficiles/faciles/écart net)
     const fdrPatternLabels = {
-      ecart_net: "↔️ Écart net (cas spécial, inchangé)",
-      deux_bas: "🟢 Les deux sous le milieu (vert + moitié basse)",
-      deux_haut: "🔴 Les deux au-dessus du milieu (moitié haute + rouge + violet)",
-      deux_jaune: "🟡 Les deux dans la bande Équilibré",
-      mixte: "↕️ Une de chaque côté du milieu (sans être un écart net)",
-      deux_difficiles: "🔴 Deux équipes difficiles (ancien classement)",
-      deux_faciles: "🟢 Deux équipes faciles (ancien classement)",
-      equilibre: "⚪ Équilibré (ancien classement)",
+      deux_faciles: "🟢 Deux équipes faciles",
+      ecart_net: "↔️ Écart net",
+      eq_deux_bas: "⚪🟢 Équilibré, tirant bas",
+      eq_deux_jaune: "⚪🟡 Équilibré, les deux dans le jaune",
+      eq_mixte: "⚪↕️ Équilibré, mixte",
+      eq_deux_haut: "⚪🔴 Équilibré, tirant haut",
+      deux_difficiles: "🔴 Deux équipes difficiles",
+      equilibre: "⚪ Équilibré (avant ce découpage)",
     };
-    const fdrPatternOrder = { deux_bas: 0, ecart_net: 1, deux_jaune: 2, mixte: 3, deux_haut: 4, deux_faciles: 5, equilibre: 6, deux_difficiles: 7 };
+    const fdrPatternOrder = { deux_faciles: 0, ecart_net: 1, eq_deux_bas: 2, eq_deux_jaune: 3, eq_mixte: 4, eq_deux_haut: 5, deux_difficiles: 6, equilibre: 7 };
     const byFdrPattern = {};
     resolved.forEach((b) => {
       if (!b.fdrPattern) return;
