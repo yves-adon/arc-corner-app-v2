@@ -6742,6 +6742,43 @@ function BilanTab({ stats }) {
           </div>
         </div>
       )}
+      {stats.decisionMatrix && stats.decisionMatrix.length > 0 && (
+        <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+          <SectionTitle sub="croise les deux tableaux ci-dessus — certaines cases seront clairsemées tant que l'échantillon est petit">Matrice de décision (contexte FDR × volatilité)</SectionTitle>
+          <div style={{ overflowX: "auto" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr repeat(3, 72px)", gap: "4px 6px", minWidth: 380 }}>
+              <span></span>
+              {["Faible", "Moyenne", "Forte"].map((vol) => (
+                <span key={vol} style={{ fontSize: 9.5, color: C.faint, textAlign: "center" }}>{vol}</span>
+              ))}
+              {stats.decisionMatrix.map((row) => (
+                <React.Fragment key={row.pattern}>
+                  <span style={{ fontSize: 10.5, color: C.text, alignSelf: "center" }}>{row.label}</span>
+                  {row.cells.map((cell) => (
+                    <div
+                      key={cell.vol}
+                      style={{
+                        textAlign: "center",
+                        padding: "5px 2px",
+                        borderRadius: 6,
+                        fontSize: 10.5,
+                        fontFamily: FONT_MONO,
+                        background: cell.decided === 0 ? "transparent" : (cell.winRate >= 50 ? C.solide : C.fragile) + "18",
+                        color: cell.decided === 0 ? C.faint : cell.winRate >= 50 ? C.solide : C.fragile,
+                      }}
+                    >
+                      {cell.decided === 0 ? "—" : `${cell.winRate.toFixed(0)}% (${cell.decided})`}
+                    </div>
+                  ))}
+                </React.Fragment>
+              ))}
+            </div>
+          </div>
+          <div style={{ fontSize: 9, color: C.faint, fontStyle: "italic" }}>
+            le nombre entre parenthèses est le nombre de paris décidés dans cette case — une case avec 1-2 paris ne veut encore rien dire de fiable
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -7065,7 +7102,35 @@ export default function App() {
       })
       .sort((a, b) => (volOrder[a.vol] ?? 9) - (volOrder[b.vol] ?? 9));
 
-    return { won, lost, push, decided, winRate, cumul: Number(cumul.toFixed(2)), series, avgEdge, total: bets.length, categories, verdicts, fdrPatterns, volatilites };
+    // matrice croisée contexte FDR × volatilité — les deux tableaux séparés ci-dessus ne
+    // peuvent pas montrer un cas comme "tirant haut + volatilité forte" vs "tirant haut +
+    // volatilité faible", qui peuvent avoir des taux de réussite très différents alors
+    // qu'ils tombent dans la même ligne "tirant haut" une fois pris séparément
+    const matrixRowOrder = ["deux_faciles", "ecart_net", "eq_bas", "eq_mixte", "eq_haut", "deux_difficiles"];
+    const matrixColOrder = ["Faible", "Moyenne", "Forte"];
+    const byMatrix = {};
+    resolved.forEach((b) => {
+      const pattern = b.fdrScoreA !== undefined && b.fdrScoreB !== undefined ? classifyFdrPattern(b.fdrScoreA, b.fdrScoreB) : b.fdrPattern;
+      const vol = b.volatiliteWorst;
+      if (!pattern || !vol) return;
+      byMatrix[pattern] = byMatrix[pattern] || {};
+      byMatrix[pattern][vol] = byMatrix[pattern][vol] || { won: 0, lost: 0, push: 0 };
+      byMatrix[pattern][vol][b.result === "won" ? "won" : b.result === "lost" ? "lost" : "push"]++;
+    });
+    const decisionMatrix = matrixRowOrder
+      .filter((pattern) => byMatrix[pattern])
+      .map((pattern) => ({
+        pattern,
+        label: fdrPatternLabels[pattern] || pattern,
+        cells: matrixColOrder.map((vol) => {
+          const c = byMatrix[pattern][vol];
+          if (!c) return { vol, won: 0, lost: 0, push: 0, decided: 0, winRate: null };
+          const dec = c.won + c.lost;
+          return { vol, won: c.won, lost: c.lost, push: c.push, decided: dec, winRate: dec ? (c.won / dec) * 100 : null };
+        }),
+      }));
+
+    return { won, lost, push, decided, winRate, cumul: Number(cumul.toFixed(2)), series, avgEdge, total: bets.length, categories, verdicts, fdrPatterns, volatilites, decisionMatrix };
   }, [bets]);
 
   const tabs = [
