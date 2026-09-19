@@ -133,21 +133,60 @@ window.sync = {
     }
   },
 
-  /* Premier appareil : envoie TOUT ce qui est en local vers ce code Supabase.
-     À utiliser une seule fois, depuis l'appareil qui a déjà les données. */
+  /* Envoie ce qui est en local vers ce code Supabase — SANS écraser ce qui existe déjà
+     sur le serveur : pour les listes à id (matchs sauvegardés, historique de paris), va
+     d'abord chercher la version serveur, fusionne avec la version locale, puis renvoie
+     la fusion (et la réécrit aussi en local, pour que cet appareil récupère au passage
+     ce qui n'existait que côté serveur). Utilisable sans risque depuis n'importe quel
+     appareil, à n'importe quel moment, même par erreur à la place de "Récupérer" — les
+     deux boutons ont le même résultat sûr : plus aucune donnée ne peut être perdue par
+     un simple mauvais clic. */
   async pushAll() {
     const code = getSyncCode();
     if (!code) return { ok: false, error: "Aucun code de synchro configuré." };
+    const MERGE_BY_ID_KEYS = ["arc_matches_v1", "arc_bets_v1"];
     const keys = safeParseKeys("");
     let sent = 0;
     for (const key of keys) {
-      const value = localStorage.getItem(PREFIX + key);
-      if (value === null) continue;
+      const localValue = localStorage.getItem(PREFIX + key);
+      if (localValue === null) continue;
+      let valueToSend = localValue;
+      if (MERGE_BY_ID_KEYS.includes(key)) {
+        try {
+          const res = await fetch(`${REST_URL}?code=eq.${encodeURIComponent(code)}&key=eq.${encodeURIComponent(key)}&select=value`, { headers: REST_HEADERS });
+          if (res.ok) {
+            const rows = await res.json();
+            if (rows.length) {
+              let remoteList = [];
+              let localList = [];
+              try {
+                remoteList = JSON.parse(rows[0].value) || [];
+              } catch (e) {
+                remoteList = [];
+              }
+              try {
+                localList = JSON.parse(localValue) || [];
+              } catch (e) {
+                localList = [];
+              }
+              const byId = new Map();
+              [...remoteList, ...localList].forEach((item) => {
+                if (item && item.id !== undefined) byId.set(item.id, item);
+              });
+              const mergedList = Array.from(byId.values());
+              valueToSend = JSON.stringify(mergedList);
+              localStorage.setItem(PREFIX + key, valueToSend); // cet appareil récupère aussi ce qui manquait
+            }
+          }
+        } catch (e) {
+          /* pas de version serveur accessible — on enverra la version locale telle quelle */
+        }
+      }
       try {
         await fetch(`${REST_URL}?on_conflict=code,key`, {
           method: "POST",
           headers: { ...REST_HEADERS, Prefer: "resolution=merge-duplicates" },
-          body: JSON.stringify({ code, key, value, updated_at: new Date().toISOString() }),
+          body: JSON.stringify({ code, key, value: valueToSend, updated_at: new Date().toISOString() }),
         });
         sent++;
       } catch (e) {
