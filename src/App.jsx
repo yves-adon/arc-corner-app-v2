@@ -4700,7 +4700,7 @@ function H2hSection({ h2h, setH2h, teamAName, teamBName, seasonProj, limitRecent
   );
 }
 
-function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, individuels, setIndividuels, h2h, setH2h, onAddBet }) {
+function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, individuels, setIndividuels, h2h, setH2h, onAddBet, bets }) {
   // limite "N dernières confrontations" pour les calculs H2H (stats corners ET axe H2H de
   // la probabilité normalisée) — même principe que "limiter aux N derniers matchs" déjà
   // proposé par profil d'équipe : évite qu'un historique qui remonte à 2014 (effectifs très
@@ -5437,7 +5437,7 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
 
       <EloPanel teamAName={teamA.nom} teamBName={teamB.nom} />
 
-      <FdrMatchSection teamAName={teamA.nom} teamBName={teamB.nom} matchesA={matchesAFiltered} matchesB={matchesBFiltered} h2h={h2hEffective} onAddBet={onAddBet} />
+      <FdrMatchSection teamAName={teamA.nom} teamBName={teamB.nom} matchesA={matchesAFiltered} matchesB={matchesBFiltered} h2h={h2hEffective} onAddBet={onAddBet} bets={bets} />
 
       <SecondaryStatPanel
         label="Tirs"
@@ -6185,6 +6185,67 @@ function classifyFdrPattern(scoreA, scoreB) {
   return bothHard ? "deux_difficiles" : bothEasy ? "deux_faciles" : clearGap ? "ecart_net" : equilibreSousCas;
 }
 
+/* Libellés + couleurs partagés pour les 6 contextes FDR — utilisés à la fois par le
+   Bilan (tableaux de taux de réussite) et par le nouveau badge "Type de match" affiché
+   directement dans le panneau FDR. Les couleurs reflètent ce que montre le Bilan à
+   l'usage (bas/facile/écart net plutôt bons, haut/difficile plutôt mauvais, mixte
+   entre les deux) — un repère, pas une garantie sur un match précis. */
+const FDR_PATTERN_META = {
+  deux_faciles: { label: "Deux équipes faciles", emoji: "🟢", color: C.solide },
+  ecart_net: { label: "Écart net", emoji: "↔️", color: C.solide },
+  eq_bas: { label: "Équilibré, tirant bas", emoji: "⚪🟢", color: C.solide },
+  eq_mixte: { label: "Équilibré, mixte", emoji: "⚪↕️", color: C.jouable },
+  eq_haut: { label: "Équilibré, tirant haut", emoji: "⚪🔴", color: C.fragile },
+  deux_difficiles: { label: "Deux équipes difficiles", emoji: "🔴", color: C.fragile },
+  equilibre: { label: "Équilibré (score brut manquant)", emoji: "⚪", color: C.faint },
+};
+const fdrPatternLabels = Object.fromEntries(Object.entries(FDR_PATTERN_META).map(([k, v]) => [k, `${v.emoji} ${v.label}`]));
+
+/* Bloc "Type de match" — visuel unique et immédiat qui répond à "sur quel genre de
+   match je suis en train de regarder ?" (contexte FDR + volatilité des deux équipes),
+   sans avoir à recomposer ça mentalement depuis les chiffres épars du panneau. Quand
+   un historique de paris existe pour cette combinaison EXACTE (contexte × volatilité),
+   affiche aussi le taux de réussite déjà observé dans ce cas précis. */
+function MatchTypeBadge({ rA, rB, inputsA, inputsB, bets }) {
+  const pattern = classifyFdrPattern(rA.score, rB.score);
+  const meta = FDR_PATTERN_META[pattern];
+  const volA = volatiliteButsLabel(inputsA.volatilite).label;
+  const volB = volatiliteButsLabel(inputsB.volatilite).label;
+  const volWorst = volA === "Forte" || volB === "Forte" ? "Forte" : volA === "Moyenne" || volB === "Moyenne" ? "Moyenne" : "Faible";
+  const volColor = volatiliteButsLabel(volWorst === "Faible" ? 0 : volWorst === "Moyenne" ? 1.5 : 2.5).color;
+
+  const historique = useMemo(() => {
+    if (!bets || !bets.length) return null;
+    let won = 0;
+    let lost = 0;
+    bets.forEach((b) => {
+      if (b.category !== "fdr" || b.fdrScoreA === undefined || b.fdrScoreB === undefined) return;
+      if (classifyFdrPattern(b.fdrScoreA, b.fdrScoreB) !== pattern || b.volatiliteWorst !== volWorst) return;
+      if (b.result === "won") won++;
+      else if (b.result === "lost") lost++;
+    });
+    const decided = won + lost;
+    return decided ? { won, lost, winRate: (won / decided) * 100 } : null;
+  }, [bets, pattern, volWorst]);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "10px 12px", borderRadius: 10, background: C.bg, border: `1px solid ${C.line}` }}>
+      <div style={{ fontSize: 9.5, color: C.faint, textTransform: "uppercase", letterSpacing: 0.4 }}>Type de match</div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <Pill color={meta.color}>{meta.emoji} {meta.label}</Pill>
+        <Pill color={volColor}>volatilité {volWorst}</Pill>
+      </div>
+      {historique ? (
+        <div style={{ fontSize: 11, color: C.dim }}>
+          historique sur ce cas exact : <b style={{ color: historique.winRate >= 50 ? C.solide : C.fragile }}>{historique.winRate.toFixed(0)}%</b> ({historique.won}G/{historique.lost}P)
+        </div>
+      ) : (
+        <div style={{ fontSize: 10, color: C.faint, fontStyle: "italic" }}>pas encore de pari tracké dans exactement ce cas (contexte + volatilité)</div>
+      )}
+    </div>
+  );
+}
+
 function StrategyConvergence({ teamAName, teamBName, proj, rA, rB, inputsA, inputsB, onAddBet }) {
   const [tcFavori, setTcFavori] = useState(null); // "A" | "B" | null
   const [fsFavori, setFsFavori] = useState(null);
@@ -6198,6 +6259,21 @@ function StrategyConvergence({ teamAName, teamBName, proj, rA, rB, inputsA, inpu
   const rule1 = favoriAgree && proj.bttsLikely;
   const rule2 = proj.bttsLikely && proj.overLikely && tcOver && fsOverBtts;
   const verdict = rule1 ? { text: `Joue VN ${favoriTeamName} + BTTS`, color: C.solide } : rule2 ? { text: "Joue BTTS + Over 2.5", color: C.solide } : null;
+
+  // point de vigilance : les sites externes (TotalCorner + Foresportia) valident déjà
+  // ce qu'il faut pour l'une des 2 règles, mais NOS PROPRES données (FDR/Poisson) ne
+  // confirment pas — un match qui "passe" chez eux mais pas chez nous. Ne se déclenche
+  // que si aucune des 2 règles n'a déjà matché (sinon pas la peine, on joue de toute façon).
+  const vigilance1 = !verdict && favoriAgree && !proj.bttsLikely;
+  const vigilance2 = !verdict && tcOver && fsOverBtts && !(proj.bttsLikely && proj.overLikely);
+  const vigilance =
+    vigilance1 && vigilance2
+      ? "Les 2 sites sont d'accord sur le favori ET sur l'Over, mais notre BTTS/Over calculé sur nos propres buts saisis ne confirme ni l'un ni l'autre."
+      : vigilance1
+      ? `${tcFavori === "A" ? teamAName || "l'équipe A" : teamBName || "l'équipe B"} est favori sur TotalCorner ET Foresportia, mais notre BTTS calculé sur nos propres données ne suit pas.`
+      : vigilance2
+      ? "Over confirmé sur TotalCorner ET Foresportia, mais notre BTTS+Over calculé sur nos propres données ne suit pas."
+      : null;
 
   // contexte FDR figé au moment de l'ajout au bilan — voir classifyFdrPattern (fonction
   // partagée, aussi utilisée pour recalculer rétroactivement le Bilan)
@@ -6292,6 +6368,10 @@ function StrategyConvergence({ teamAName, teamBName, proj, rA, rB, inputsA, inpu
             </button>
           )}
         </div>
+      ) : vigilance ? (
+        <div style={{ padding: "10px 12px", borderRadius: 8, background: C.fragile + "18", border: `1px solid ${C.fragile}55`, fontSize: 11.5, color: C.fragile }}>
+          ⚠️ <b>Point de vigilance</b> — {vigilance}
+        </div>
       ) : (
         <div style={{ fontSize: 11, color: C.faint }}>Aucune des 2 règles ne matche pour l'instant.</div>
       )}
@@ -6324,7 +6404,7 @@ function VolBadgeTrio({ vTotal, vAttaque, vDefense }) {
   );
 }
 
-function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h, onAddBet }) {
+function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h, onAddBet, bets }) {
   const [formeWindow, setFormeWindow] = useState(5);
   const [venue, setVenue] = useState("A"); // "A" = A à domicile, "N" = neutre, "B" = B à domicile
 
@@ -6416,6 +6496,8 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h, onAddB
         {rA && rB && (
           <FdrGaugeBar teamAName={teamAName} teamAScore={rA.score} teamAColor={C.teamA} teamBName={teamBName} teamBScore={rB.score} teamBColor={C.teamB} />
         )}
+
+        {rA && rB && inputsA && inputsB && <MatchTypeBadge rA={rA} rB={rB} inputsA={inputsA} inputsB={inputsB} bets={bets} />}
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <Card name={teamAName} color={C.teamA} r={rA} missing={!inputsB} oppInputs={inputsB} />
@@ -7051,21 +7133,8 @@ export default function App() {
     // net / équilibré) — capturé au moment de l'ajout au bilan (bouton du panneau FDR) —
     // répond à "est-ce que le code couleur FDR corrèle vraiment avec mes résultats, sur
     // plus que 2-3 matchs jugés au cas par cas"
-    // anciens noms (deux_difficiles/deux_faciles/equilibre) gardés dans le libellé pour
-    // que les paris déjà trackés avant ce changement restent lisibles dans le Bilan —
-    // seuls les NOUVEAUX paris utiliseront la classification à 4 cas ci-dessous
-    // tous les paris (y compris les anciens) sont reclassés avec la logique actuelle via
-    // classifyFdrPattern — seuls ces 6 libellés existent désormais, plus "equilibre" en
-    // repli pour d'éventuels très anciens paris sans scores bruts stockés
-    const fdrPatternLabels = {
-      deux_faciles: "🟢 Deux équipes faciles",
-      ecart_net: "↔️ Écart net",
-      eq_bas: "⚪🟢 Équilibré, tirant bas",
-      eq_mixte: "⚪↕️ Équilibré, mixte",
-      eq_haut: "⚪🔴 Équilibré, tirant haut",
-      deux_difficiles: "🔴 Deux équipes difficiles",
-      equilibre: "⚪ Équilibré (score brut manquant)",
-    };
+    // fdrPatternLabels est maintenant partagé au niveau module (voir FDR_PATTERN_META),
+    // réutilisé aussi par le badge "Type de match" affiché directement dans le panneau FDR
     // pattern RECALCULÉ à partir des scores bruts stockés (fdrScoreA/fdrScoreB), pas de
     // l'étiquette figée à l'ajout — ainsi tout l'historique se reclasse automatiquement
     // avec la logique actuelle de classifyFdrPattern, même les paris ajoutés avant un
@@ -7279,7 +7348,7 @@ export default function App() {
             <Loader2 className="animate-spin" size={22} />
           </div>
         ) : tab === "comparateur" ? (
-          <ComparateurTab teamA={teamA} setTeamA={setTeamA} teamB={teamB} setTeamB={setTeamB} lignes={lignes} setLignes={setLignes} individuels={individuels} setIndividuels={setIndividuels} h2h={h2h} setH2h={setH2h} onAddBet={addBet} />
+          <ComparateurTab teamA={teamA} setTeamA={setTeamA} teamB={teamB} setTeamB={setTeamB} lignes={lignes} setLignes={setLignes} individuels={individuels} setIndividuels={setIndividuels} h2h={h2h} setH2h={setH2h} onAddBet={addBet} bets={bets} />
         ) : tab === "historique" ? (
           <HistoriqueTab bets={bets} setResult={setResult} removeBet={removeBet} addManualBet={addBet} updateCote={updateCote} />
         ) : (
