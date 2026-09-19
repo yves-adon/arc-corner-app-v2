@@ -6749,6 +6749,90 @@ function BilanTab({ stats }) {
 /* ---------------------------------------------------------------
    MAIN APP
 --------------------------------------------------------------- */
+/* Réglages de synchronisation multi-appareils — un code perso (pas un mot de passe,
+   pas de compte formel) identifie tes données sur un petit serveur Supabase partagé.
+   "Envoyer" sert au TOUT PREMIER appareil (celui qui a déjà tes données) pour les
+   pousser vers ce code. "Récupérer" sert à un NOUVEL appareil pour rapatrier ce qui a
+   déjà été envoyé — ça REMPLACE le contenu local, donc à ne jamais faire sur l'appareil
+   qui a les données à jour. Une fois le code configuré, chaque sauvegarde ultérieure se
+   synchronise automatiquement en arrière-plan (aucune action supplémentaire requise). */
+function SyncPanel({ onClose }) {
+  const [code, setCode] = useState(() => window.sync?.getCode() || "");
+  const [saved, setSaved] = useState(!!window.sync?.getCode());
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  const activate = () => {
+    if (!code.trim()) return;
+    window.sync.setCode(code.trim());
+    setSaved(true);
+    setMsg(null);
+  };
+
+  const runPush = async () => {
+    setBusy(true);
+    setMsg(null);
+    const r = await window.sync.pushAll();
+    setMsg(r.ok ? { type: "ok", text: `✓ ${r.sent} élément(s) envoyé(s) vers ce code.` } : { type: "err", text: r.error || "Échec de l'envoi." });
+    setBusy(false);
+  };
+
+  const runPull = async () => {
+    setBusy(true);
+    setMsg(null);
+    const r = await window.sync.pullAll();
+    setMsg(r.ok ? { type: "ok", text: `✓ ${r.merged} liste(s) fusionnée(s) sans rien écraser — recharge la page pour voir le résultat.` } : { type: "err", text: r.error || "Échec de la récupération." });
+    setBusy(false);
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 50, display: "flex", alignItems: "flex-end", justifyContent: "center" }} onClick={onClose}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: "16px 16px 0 0", padding: 16, width: "100%", maxWidth: 480, display: "flex", flexDirection: "column", gap: 12, maxHeight: "85vh", overflowY: "auto" }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <SectionTitle sub="un code perso pour retrouver tes données sur tous tes appareils">Synchronisation</SectionTitle>
+          <IconBtn onClick={onClose} color={C.faint} title="Fermer"><X size={16} /></IconBtn>
+        </div>
+
+        <Field label="Ton code (choisis-en un, garde-le identique sur tous tes appareils)">
+          <TextInput value={code} onChange={setCode} placeholder="ex. yves-arc-2026" />
+        </Field>
+        {!saved ? (
+          <button onClick={activate} disabled={!code.trim()} style={{ background: C.solide + "22", border: `1px solid ${C.solide}55`, borderRadius: 8, padding: "9px", color: C.solide, fontWeight: 700, fontSize: 12.5, cursor: code.trim() ? "pointer" : "default" }}>
+            Activer ce code sur cet appareil
+          </button>
+        ) : (
+          <>
+            <div style={{ fontSize: 10.5, color: C.faint }}>Code actif : <b style={{ color: C.text }}>{code}</b></div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 8, padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+                <div style={{ fontSize: 11.5, fontWeight: 700, color: C.text }}>Sur l'appareil qui a déjà tes données</div>
+                <div style={{ fontSize: 10.5, color: C.faint }}>Envoie tout ce qui est en local vers ce code — à faire une seule fois.</div>
+                <button onClick={runPush} disabled={busy} style={{ background: C.solide + "22", border: `1px solid ${C.solide}55`, borderRadius: 6, padding: "7px", color: C.solide, fontWeight: 700, fontSize: 11.5, cursor: busy ? "default" : "pointer" }}>
+                  {busy ? "…" : "Envoyer mes données vers ce code"}
+                </button>
+              </div>
+              <div style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 8, padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+                <div style={{ fontSize: 11.5, fontWeight: 700, color: C.text }}>Sur un appareil qui a AUSSI des données locales</div>
+                <div style={{ fontSize: 10.5, color: C.faint }}>Fusionne tes matchs sauvegardés et ton historique de paris avec ceux déjà envoyés — rien n'est écrasé, les deux côtés sont conservés. Le brouillon en cours sur cet appareil n'est pas touché.</div>
+                <button onClick={runPull} disabled={busy} style={{ background: C.jouable + "22", border: `1px solid ${C.jouable}55`, borderRadius: 6, padding: "7px", color: C.jouable, fontWeight: 700, fontSize: 11.5, cursor: busy ? "default" : "pointer" }}>
+                  {busy ? "…" : "Récupérer et fusionner les données de ce code"}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+        {msg && <div style={{ fontSize: 11, color: msg.type === "ok" ? C.solide : C.fragile }}>{msg.text}</div>}
+        <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic" }}>
+          Après activation, chaque sauvegarde se synchronise automatiquement en arrière-plan sur cet appareil — pas besoin de revenir ici, sauf pour le premier envoi ou un nouvel appareil.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [tab, setTab] = useState("comparateur");
   const [loading, setLoading] = useState(true);
@@ -6768,6 +6852,7 @@ export default function App() {
   const [savingDraft, setSavingDraft] = useState(false);
   const [lastSaved, setLastSaved] = useState(null);
   const [storageBroken, setStorageBroken] = useState(false);
+  const [showSyncPanel, setShowSyncPanel] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -7022,6 +7107,13 @@ export default function App() {
                 : "Comparateur d'équipes · corners"}
             </div>
           </div>
+          <button
+            onClick={() => setShowSyncPanel(true)}
+            title="Synchronisation multi-appareils"
+            style={{ marginLeft: tab === "comparateur" ? 0 : "auto", background: "transparent", border: `1px solid ${C.line}`, borderRadius: 8, padding: "6px 9px", color: C.faint, fontSize: 13, cursor: "pointer" }}
+          >
+            🔄
+          </button>
           {tab === "comparateur" && (
             <div style={{ display: "flex", gap: 6, marginLeft: "auto" }}>
               <button
@@ -7145,6 +7237,7 @@ export default function App() {
           </div>
         )}
       </div>
+      {showSyncPanel && <SyncPanel onClose={() => setShowSyncPanel(false)} />}
     </div>
   );
 }
