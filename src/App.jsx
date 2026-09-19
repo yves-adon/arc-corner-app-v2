@@ -6806,17 +6806,18 @@ function SyncPanel({ onClose }) {
         ) : (
           <>
             <div style={{ fontSize: 10.5, color: C.faint }}>Code actif : <b style={{ color: C.text }}>{code}</b></div>
+            <div style={{ fontSize: 10, color: C.faint, fontStyle: "italic" }}>
+              Les deux boutons ci-dessous fusionnent tes matchs sauvegardés et ton historique de paris avec ceux déjà sur le serveur — rien n'est jamais écrasé, aucun risque à cliquer le "mauvais" en te trompant. Le brouillon en cours sur cet appareil n'est jamais touché.
+            </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               <div style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 8, padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-                <div style={{ fontSize: 11.5, fontWeight: 700, color: C.text }}>Sur l'appareil qui a déjà tes données</div>
-                <div style={{ fontSize: 10.5, color: C.faint }}>Envoie tout ce qui est en local vers ce code — à faire une seule fois.</div>
+                <div style={{ fontSize: 11.5, fontWeight: 700, color: C.text }}>Envoyer ce que cet appareil a en local</div>
                 <button onClick={runPush} disabled={busy} style={{ background: C.solide + "22", border: `1px solid ${C.solide}55`, borderRadius: 6, padding: "7px", color: C.solide, fontWeight: 700, fontSize: 11.5, cursor: busy ? "default" : "pointer" }}>
                   {busy ? "…" : "Envoyer mes données vers ce code"}
                 </button>
               </div>
               <div style={{ background: C.bg, border: `1px solid ${C.line}`, borderRadius: 8, padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-                <div style={{ fontSize: 11.5, fontWeight: 700, color: C.text }}>Sur un appareil qui a AUSSI des données locales</div>
-                <div style={{ fontSize: 10.5, color: C.faint }}>Fusionne tes matchs sauvegardés et ton historique de paris avec ceux déjà envoyés — rien n'est écrasé, les deux côtés sont conservés. Le brouillon en cours sur cet appareil n'est pas touché.</div>
+                <div style={{ fontSize: 11.5, fontWeight: 700, color: C.text }}>Récupérer ce qui vient d'autres appareils</div>
                 <button onClick={runPull} disabled={busy} style={{ background: C.jouable + "22", border: `1px solid ${C.jouable}55`, borderRadius: 6, padding: "7px", color: C.jouable, fontWeight: 700, fontSize: 11.5, cursor: busy ? "default" : "pointer" }}>
                   {busy ? "…" : "Récupérer et fusionner les données de ce code"}
                 </button>
