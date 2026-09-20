@@ -6257,11 +6257,16 @@ function StrategyConvergence({ teamAName, teamBName, proj, rA, rB, inputsA, inpu
   const [added, setAdded] = useState(false);
 
   const favoriAgree = tcFavori !== null && fsFavori !== null && tcFavori === fsFavori;
-  const favoriTeamName = favoriAgree ? (tcFavori === "A" ? teamAName || "équipe A" : teamBName || "équipe B") : null;
 
   const rule1 = favoriAgree && proj.bttsLikely;
   const rule2 = proj.bttsLikely && proj.overLikely && tcOver && fsOverBtts;
-  const verdict = rule1 ? { text: `Joue VN ${favoriTeamName} + BTTS`, color: C.solide } : rule2 ? { text: "Joue BTTS + Over 2.5", color: C.solide } : null;
+  // Règle 1 : le VN (victoire ou nul) a été retiré — dans les matchs où BTTS coche (jeu
+  // ouvert, défenses perméables des deux côtés), c'est justement le profil de match où
+  // l'outsider a le plus de chances de créer la surprise nette, donc la jambe VN cassait
+  // souvent (score type 2-1) alors que le BTTS, lui, passait. Le favori (accord des 2
+  // sites) reste utilisé comme confirmation de fiabilité du signal, mais on ne mise plus
+  // sur son résultat — seulement sur BTTS.
+  const verdict = rule1 ? { text: "Joue BTTS", color: C.solide } : rule2 ? { text: "Joue BTTS + Over 2.5", color: C.solide } : null;
 
   // point de vigilance : les sites externes (TotalCorner + Foresportia) valident déjà
   // ce qu'il faut pour l'une des 2 règles, mais NOS PROPRES données (FDR/Poisson) ne
@@ -6292,7 +6297,7 @@ function StrategyConvergence({ teamAName, teamBName, proj, rA, rB, inputsA, inpu
       category: "fdr",
       label: `${verdict.text} — ${teamAName || "A"} vs ${teamBName || "B"}`,
       cote: "",
-      ruleUsed: rule1 ? "Règle 1 (VN+BTTS)" : "Règle 2 (BTTS+Over)",
+      ruleUsed: rule1 ? "Règle 1 (BTTS)" : "Règle 2 (BTTS+Over)",
       fdrBandA: rA.band.label,
       fdrScoreA: Number(rA.score.toFixed(2)),
       fdrBandB: rB.band.label,
@@ -6380,7 +6385,7 @@ function StrategyConvergence({ teamAName, teamBName, proj, rA, rB, inputsA, inpu
       )}
 
       <div style={{ fontSize: 9, color: C.faint, fontStyle: "italic" }}>
-        Règle 1 : même favori sur TotalCorner et Foresportia + BTTS probable (FDR) → VN du favori + BTTS.
+        Règle 1 : même favori sur TotalCorner et Foresportia + BTTS probable (FDR) → BTTS seul (le favori sert de confirmation de fiabilité, on ne mise plus sur son résultat — dans les matchs où BTTS coche, la jambe "victoire ou nul" cassait trop souvent sur un score net type 2-1).
         Règle 2 : BTTS et Over probables (FDR), Over confirmé sur TotalCorner et Foresportia → BTTS + Over — s'applique aussi quand les 2 sites ne sont pas d'accord sur le favori, puisque cette règle ne dépend pas d'un vainqueur.
       </div>
     </div>
@@ -6766,6 +6771,24 @@ function BilanTab({ stats }) {
                   <span>{c.won}G / {c.lost}P{c.push ? ` / ${c.push} push` : ""}</span>
                   <b style={{ color: c.winRate === null ? C.faint : c.winRate >= 50 ? C.solide : C.fragile, minWidth: 34, textAlign: "right" }}>
                     {c.winRate !== null ? `${c.winRate.toFixed(0)}%` : "—"}
+                  </b>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {stats.byRuleUsed && stats.byRuleUsed.length > 0 && (
+        <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+          <SectionTitle sub="compare BTTS seul, BTTS+Over, et l'ancien VN+BTTS (abandonné) — pour vérifier objectivement lequel rapporte vraiment le plus">Par type de pari</SectionTitle>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {stats.byRuleUsed.map((r) => (
+              <div key={r.rule} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5 }}>
+                <span style={{ color: C.text }}>{r.rule}</span>
+                <span style={{ fontFamily: FONT_MONO, color: C.dim, display: "flex", alignItems: "center", gap: 8 }}>
+                  <span>{r.won}G / {r.lost}P{r.push ? ` / ${r.push} push` : ""}</span>
+                  <b style={{ color: r.winRate === null ? C.faint : r.winRate >= 50 ? C.solide : C.fragile, minWidth: 34, textAlign: "right" }}>
+                    {r.winRate !== null ? `${r.winRate.toFixed(0)}%` : "—"}
                   </b>
                 </span>
               </div>
@@ -7191,6 +7214,24 @@ export default function App() {
       byMatrix[pattern][vol] = byMatrix[pattern][vol] || { won: 0, lost: 0, push: 0 };
       byMatrix[pattern][vol][b.result === "won" ? "won" : b.result === "lost" ? "lost" : "push"]++;
     });
+    // taux de réussite par type de pari joué (ruleUsed, figé à l'ajout — pas recalculable
+    // depuis les scores bruts comme le contexte FDR, puisque c'est un choix de règle, pas
+    // une classification) — sert à comparer objectivement BTTS seul contre BTTS+Over, et
+    // les anciens paris VN+BTTS (avant l'abandon du VN) contre les nouveaux BTTS seul
+    const byRule = {};
+    resolved.forEach((b) => {
+      if (!b.ruleUsed) return;
+      if (!byRule[b.ruleUsed]) byRule[b.ruleUsed] = { won: 0, lost: 0, push: 0 };
+      byRule[b.ruleUsed][b.result === "won" ? "won" : b.result === "lost" ? "lost" : "push"]++;
+    });
+    const ruleOrder = { "Règle 1 (BTTS)": 0, "Règle 1 (VN+BTTS)": 1, "Règle 2 (BTTS+Over)": 2 };
+    const byRuleUsed = Object.entries(byRule)
+      .map(([rule, c]) => {
+        const dec = c.won + c.lost;
+        return { rule, won: c.won, lost: c.lost, push: c.push, decided: dec, winRate: dec ? (c.won / dec) * 100 : null };
+      })
+      .sort((a, b) => (ruleOrder[a.rule] ?? 9) - (ruleOrder[b.rule] ?? 9));
+
     const decisionMatrix = matrixRowOrder
       .filter((pattern) => byMatrix[pattern])
       .map((pattern) => ({
@@ -7204,7 +7245,7 @@ export default function App() {
         }),
       }));
 
-    return { won, lost, push, decided, winRate, cumul: Number(cumul.toFixed(2)), series, avgEdge, total: bets.length, categories, verdicts, fdrPatterns, volatilites, decisionMatrix };
+    return { won, lost, push, decided, winRate, cumul: Number(cumul.toFixed(2)), series, avgEdge, total: bets.length, categories, verdicts, fdrPatterns, volatilites, decisionMatrix, byRuleUsed };
   }, [bets]);
 
   const tabs = [
