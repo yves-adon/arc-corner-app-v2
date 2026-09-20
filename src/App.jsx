@@ -5802,11 +5802,14 @@ function ResultBtn({ active, color, onClick, children }) {
   );
 }
 function HistoriqueTab({ bets, setResult, removeBet, addManualBet, updateCote }) {
+  // trié par date à l'AFFICHAGE, jamais dépendant de l'ordre de stockage — une fusion
+  // multi-appareils ne garantit aucun ordre particulier dans le tableau brut
+  const sortedBets = useMemo(() => [...bets].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)), [bets]);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <QuickAddForm onAdd={addManualBet} />
       {!bets.length && <EmptyState title="Aucun pari suivi" text="Ajoute un pari terminé ci-dessus, ou utilise le bouton « Suivre » depuis l'onglet Comparateur." />}
-      {bets.map((b) => (
+      {sortedBets.map((b) => (
         <div key={b.id} style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
             <div style={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.3 }}>{b.label}</div>
@@ -7080,7 +7083,9 @@ export default function App() {
   const updateCote = (id, cote) => persist(bets.map((b) => (b.id === id ? { ...b, cote } : b)));
 
   const stats = useMemo(() => {
-    const resolved = bets.filter((b) => b.result !== "pending");
+    // trié explicitement par date — ne JAMAIS supposer que le tableau brut est déjà
+    // dans un ordre particulier (une fusion multi-appareils ne le garantit pas)
+    const resolved = bets.filter((b) => b.result !== "pending").sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
     const won = resolved.filter((b) => b.result === "won").length;
     const lost = resolved.filter((b) => b.result === "lost").length;
     const push = resolved.filter((b) => b.result === "push").length;
@@ -7088,7 +7093,7 @@ export default function App() {
     const winRate = decided ? (won / decided) * 100 : null;
     let cumul = 0;
     const series = [];
-    [...resolved].reverse().forEach((b, i) => {
+    resolved.forEach((b, i) => {
       const c = parseFloat(b.cote);
       if (b.result === "won" && c) cumul += (c - 1) * b.stake;
       else if (b.result === "lost") cumul -= b.stake;
@@ -7305,7 +7310,10 @@ export default function App() {
             {!savedMatches.length ? (
               <div style={{ fontSize: 12, color: C.faint }}>Aucun match sauvegardé pour l'instant.</div>
             ) : (
-              savedMatches.map((m) => (
+              savedMatches
+                .slice()
+                .sort((a, b) => new Date(b.savedAt) - new Date(a.savedAt))
+                .map((m) => (
                 <div key={m.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, borderBottom: `1px solid ${C.line}`, paddingBottom: 8 }}>
                   <div>
                     <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{m.name}</div>
