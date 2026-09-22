@@ -5837,6 +5837,25 @@ function HistoriqueTab({ bets, setResult, removeBet, addManualBet, updateCote })
             <ResultBtn active={b.result === "push"} color={C.jouable} onClick={() => setResult(b.id, "push")}><Minus size={13} /> Push</ResultBtn>
             <ResultBtn active={b.result === "pending"} color={C.dim} onClick={() => setResult(b.id, "pending")}><RotateCcw size={13} /></ResultBtn>
           </div>
+          {b.detailA && b.detailB && (
+            <Collapsible
+              title={b.result === "lost" ? "🔎 Détail équipe par équipe (perdu — à examiner)" : "🔎 Détail équipe par équipe"}
+              color={b.result === "lost" ? C.fragile : C.faint}
+              defaultOpen={false}
+            >
+              {[
+                { name: b.teamAName || "A", d: b.detailA },
+                { name: b.teamBName || "B", d: b.detailB },
+              ].map((t) => (
+                <div key={t.name} style={{ display: "flex", flexDirection: "column", gap: 2, marginBottom: 4 }}>
+                  <span style={{ color: C.text, fontWeight: 700 }}>{t.name}</span>
+                  <span>
+                    attaque <b style={{ color: C.text }}>{t.d.attaque}</b> (vol. {t.d.volAttaque}) · défense <b style={{ color: C.text }}>{t.d.defense}</b> (vol. {t.d.volDefense})
+                  </span>
+                </div>
+              ))}
+            </Collapsible>
+          )}
         </div>
       ))}
     </div>
@@ -6228,8 +6247,22 @@ function MatchTypeBadge({ rA, rB, inputsA, inputsB, bets }) {
       else if (b.result === "lost") lost++;
     });
     const decided = won + lost;
-    return decided ? { won, lost, winRate: (won / decided) * 100 } : null;
+    return decided ? { won, lost, decided, winRate: (won / decided) * 100 } : null;
   }, [bets, pattern, volWorst]);
+
+  // recommandation directe (au lieu de laisser interpréter le %) — basée UNIQUEMENT sur
+  // ton propre historique pour ce cas exact (contexte × volatilité), pas sur un modèle
+  // théorique. Sous 3 décisions, le pourcentage seul ne veut encore rien dire de fiable —
+  // "prudence" par manque de données, pas par mauvais résultat.
+  const reco = !historique
+    ? { label: "❓ Pas encore de recul", color: C.faint }
+    : historique.decided < 3
+    ? { label: `⚠️ Prudence — seulement ${historique.decided} pari(s) dans ce cas`, color: C.jouable }
+    : historique.winRate >= 60
+    ? { label: `✅ Parie — ${historique.winRate.toFixed(0)}% sur ${historique.decided} paris`, color: C.solide }
+    : historique.winRate < 40
+    ? { label: `❌ Évite — seulement ${historique.winRate.toFixed(0)}% sur ${historique.decided} paris`, color: C.fragile }
+    : { label: `⚠️ Prudence — ${historique.winRate.toFixed(0)}% mitigé sur ${historique.decided} paris`, color: C.jouable };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "10px 12px", borderRadius: 10, background: C.bg, border: `1px solid ${C.line}` }}>
@@ -6238,13 +6271,12 @@ function MatchTypeBadge({ rA, rB, inputsA, inputsB, bets }) {
         <Pill color={meta.color}>{meta.emoji} {meta.label}</Pill>
         <Pill color={volColor}>volatilité {volWorst}</Pill>
       </div>
-      {historique ? (
-        <div style={{ fontSize: 11, color: C.dim }}>
-          historique sur ce cas exact : <b style={{ color: historique.winRate >= 50 ? C.solide : C.fragile }}>{historique.winRate.toFixed(0)}%</b> ({historique.won}G/{historique.lost}P)
-        </div>
-      ) : (
-        <div style={{ fontSize: 10, color: C.faint, fontStyle: "italic" }}>pas encore de pari tracké dans exactement ce cas (contexte + volatilité)</div>
-      )}
+      <div style={{ padding: "7px 10px", borderRadius: 8, background: reco.color + "18", border: `1px solid ${reco.color}55`, fontSize: 12, fontWeight: 700, color: reco.color }}>
+        {reco.label}
+      </div>
+      <div style={{ fontSize: 9, color: C.faint, fontStyle: "italic" }}>
+        recommandation basée sur TON historique réel pour ce cas exact — pas un modèle théorique
+      </div>
     </div>
   );
 }
@@ -6298,6 +6330,8 @@ function StrategyConvergence({ teamAName, teamBName, proj, rA, rB, inputsA, inpu
       label: `${verdict.text} — ${teamAName || "A"} vs ${teamBName || "B"}`,
       cote: "",
       ruleUsed: rule1 ? "Règle 1 (BTTS)" : "Règle 2 (BTTS+Over)",
+      teamAName: teamAName || "A",
+      teamBName: teamBName || "B",
       fdrBandA: rA.band.label,
       fdrScoreA: Number(rA.score.toFixed(2)),
       fdrBandB: rB.band.label,
@@ -6305,6 +6339,11 @@ function StrategyConvergence({ teamAName, teamBName, proj, rA, rB, inputsA, inpu
       fdrPattern,
       volatiliteWorst,
       bttsFreqAlert,
+      // détail par équipe (pas juste "la pire des deux") — pour pouvoir, plus tard,
+      // examiner les paris perdus cas par cas et voir si un point commun se dégage (ex.
+      // toujours l'équipe à l'attaque volatile qui déçoit, plutôt que la défense)
+      detailA: { attaque: Number(inputsA.attaque.toFixed(2)), defense: Number(inputsA.defense.toFixed(2)), volAttaque: volatiliteButsLabel(inputsA.volatiliteAttaque).label, volDefense: volatiliteButsLabel(inputsA.volatiliteDefense).label },
+      detailB: { attaque: Number(inputsB.attaque.toFixed(2)), defense: Number(inputsB.defense.toFixed(2)), volAttaque: volatiliteButsLabel(inputsB.volatiliteAttaque).label, volDefense: volatiliteButsLabel(inputsB.volatiliteDefense).label },
     });
     setAdded(true);
   };
@@ -6796,6 +6835,30 @@ function BilanTab({ stats }) {
           </div>
         </div>
       )}
+      {stats.lostPostMortem && (
+        <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+          <SectionTitle sub="parmi les paris avec détail équipe par équipe (ajoutés récemment) — une équipe en volatilité Forte revient-elle plus souvent dans les échecs ?">Post-mortem des paris perdus</SectionTitle>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12.5 }}>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <span style={{ color: C.text }}>Paris perdus avec au moins une volatilité Forte</span>
+              <b style={{ color: C.fragile, fontFamily: FONT_MONO }}>
+                {stats.lostPostMortem.lostWithForte}/{stats.lostPostMortem.lostTotal} ({((stats.lostPostMortem.lostWithForte / stats.lostPostMortem.lostTotal) * 100).toFixed(0)}%)
+              </b>
+            </div>
+            {stats.lostPostMortem.wonTotal > 0 && (
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <span style={{ color: C.text }}>Paris gagnés avec au moins une volatilité Forte</span>
+                <b style={{ color: C.solide, fontFamily: FONT_MONO }}>
+                  {stats.lostPostMortem.wonWithForte}/{stats.lostPostMortem.wonTotal} ({((stats.lostPostMortem.wonWithForte / stats.lostPostMortem.wonTotal) * 100).toFixed(0)}%)
+                </b>
+              </div>
+            )}
+          </div>
+          <div style={{ fontSize: 9, color: C.faint, fontStyle: "italic" }}>
+            si le % est nettement plus haut chez les perdus que chez les gagnés, la volatilité forte est un vrai signal de risque à part entière — regarde le détail équipe par équipe de chaque pari perdu dans l'Historique pour confirmer lequel des deux camps (attaque ou défense) est en cause
+          </div>
+        </div>
+      )}
       {stats.verdicts && stats.verdicts.length > 0 && (
         <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
           <SectionTitle sub="le ratio marge/volatilité est-il un vrai indicateur de qualité, ou juste du bruit ?">Par verdict</SectionTitle>
@@ -7232,6 +7295,24 @@ export default function App() {
       })
       .sort((a, b) => (ruleOrder[a.rule] ?? 9) - (ruleOrder[b.rule] ?? 9));
 
+    // point commun sur les paris PERDUS uniquement (parmi ceux avec le détail par équipe
+    // — les paris ajoutés avant cette fonctionnalité n'en ont pas) : est-ce qu'une
+    // volatilité "Forte" (attaque ou défense, n'importe quel camp) revient plus souvent
+    // dans les échecs que dans les réussites ? Répond directement à "les matchs perdants
+    // ont-ils échoué à cause de la volatilité d'une équipe ?"
+    const lostWithDetail = resolved.filter((b) => b.result === "lost" && b.detailA && b.detailB);
+    const wonWithDetail = resolved.filter((b) => b.result === "won" && b.detailA && b.detailB);
+    const hasForteVol = (b) => [b.detailA.volAttaque, b.detailA.volDefense, b.detailB.volAttaque, b.detailB.volDefense].includes("Forte");
+    const lostPostMortem =
+      lostWithDetail.length >= 3
+        ? {
+            lostTotal: lostWithDetail.length,
+            lostWithForte: lostWithDetail.filter(hasForteVol).length,
+            wonTotal: wonWithDetail.length,
+            wonWithForte: wonWithDetail.filter(hasForteVol).length,
+          }
+        : null;
+
     const decisionMatrix = matrixRowOrder
       .filter((pattern) => byMatrix[pattern])
       .map((pattern) => ({
@@ -7245,7 +7326,7 @@ export default function App() {
         }),
       }));
 
-    return { won, lost, push, decided, winRate, cumul: Number(cumul.toFixed(2)), series, avgEdge, total: bets.length, categories, verdicts, fdrPatterns, volatilites, decisionMatrix, byRuleUsed };
+    return { won, lost, push, decided, winRate, cumul: Number(cumul.toFixed(2)), series, avgEdge, total: bets.length, categories, verdicts, fdrPatterns, volatilites, decisionMatrix, byRuleUsed, lostPostMortem };
   }, [bets]);
 
   const tabs = [
