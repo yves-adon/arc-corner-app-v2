@@ -7027,6 +7027,62 @@ function BilanTab({ stats }) {
           </div>
         </div>
       )}
+      {["domicile", "neutre", "exterieur"].map((vc) => {
+        const rows = stats.decisionMatrixByContext && stats.decisionMatrixByContext[vc];
+        if (!rows || rows.length === 0) return null;
+        const meta = FDR_VENUE_CONTEXT_META[vc];
+        return (
+          <div key={vc} style={{ background: C.surface, border: `1px solid ${meta.color}55`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+            <SectionTitle sub={`même croisement contexte FDR × volatilité que ci-dessus, mais limité aux paris joués en contexte ${meta.label.toLowerCase()}`}>
+              {meta.emoji} Matrice de décision — {meta.label}
+            </SectionTitle>
+            <div style={{ overflowX: "auto" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr repeat(3, 72px) 72px", gap: "4px 6px", minWidth: 380 }}>
+                <span></span>
+                {["Faible", "Moyenne", "Forte"].map((vol) => (
+                  <span key={vol} style={{ fontSize: 9.5, color: C.faint, textAlign: "center" }}>{vol}</span>
+                ))}
+                <span style={{ fontSize: 9.5, color: C.text, fontWeight: 700, textAlign: "center" }}>Total</span>
+                {rows.map((row) => (
+                  <React.Fragment key={row.pattern}>
+                    <span style={{ fontSize: 10.5, color: C.text, alignSelf: "center" }}>{row.label}</span>
+                    {row.cells.map((cell) => (
+                      <div
+                        key={cell.vol}
+                        style={{
+                          textAlign: "center",
+                          padding: "5px 2px",
+                          borderRadius: 6,
+                          fontSize: 10.5,
+                          fontFamily: FONT_MONO,
+                          background: cell.decided === 0 ? "transparent" : (cell.winRate >= 50 ? C.solide : C.fragile) + "18",
+                          color: cell.decided === 0 ? C.faint : cell.winRate >= 50 ? C.solide : C.fragile,
+                        }}
+                      >
+                        {cell.decided === 0 ? "—" : `${cell.winRate.toFixed(0)}% (${cell.decided})`}
+                      </div>
+                    ))}
+                    <div
+                      style={{
+                        textAlign: "center",
+                        padding: "5px 2px",
+                        borderRadius: 6,
+                        fontSize: 10.5,
+                        fontWeight: 700,
+                        fontFamily: FONT_MONO,
+                        background: row.total.decided === 0 ? "transparent" : (row.total.winRate >= 50 ? C.solide : C.fragile) + "28",
+                        color: row.total.decided === 0 ? C.faint : row.total.winRate >= 50 ? C.solide : C.fragile,
+                      }}
+                    >
+                      {row.total.decided === 0 ? "—" : `${row.total.winRate.toFixed(0)}% (${row.total.decided})`}
+                    </div>
+                  </React.Fragment>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      })}
       {stats.decisionMatrix && stats.decisionMatrix.length > 0 && (
         <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
           <SectionTitle sub="croise les deux tableaux ci-dessus — certaines cases seront clairsemées tant que l'échantillon est petit">Matrice de décision (contexte FDR × volatilité)</SectionTitle>
@@ -7507,7 +7563,46 @@ export default function App() {
         }),
       }));
 
-    return { won, lost, push, decided, winRate, cumul: Number(cumul.toFixed(2)), series, avgEdge, total: bets.length, categories, verdicts, fdrPatterns, volatilites, decisionMatrix, venueContexts, terrainImpact, decisionMatrixVenue, byRuleUsed, lostPostMortem };
+    // même matrice contexte FDR × volatilité que decisionMatrix, mais recalculée à
+    // l'intérieur de chaque contexte terrain séparément (domicile / neutre / extérieur)
+    // — répond directement à "comment se comporte chaque cas de figure (tirant haut,
+    // mixte, etc.) une fois qu'on isole domicile / neutre / extérieur", plutôt que la
+    // version fusionnée de decisionMatrixVenue qui perd la dimension volatilité
+    const buildPatternVolMatrix = (betsSubset) => {
+      const acc = {};
+      betsSubset.forEach((b) => {
+        const pattern = b.fdrScoreA !== undefined && b.fdrScoreB !== undefined ? classifyFdrPattern(b.fdrScoreA, b.fdrScoreB) : b.fdrPattern;
+        const vol = b.volatiliteWorst;
+        if (!pattern || !vol) return;
+        acc[pattern] = acc[pattern] || {};
+        acc[pattern][vol] = acc[pattern][vol] || { won: 0, lost: 0, push: 0 };
+        acc[pattern][vol][b.result === "won" ? "won" : b.result === "lost" ? "lost" : "push"]++;
+      });
+      return matrixRowOrder
+        .filter((pattern) => acc[pattern])
+        .map((pattern) => {
+          const cells = matrixColOrder.map((vol) => {
+            const c = acc[pattern][vol];
+            if (!c) return { vol, won: 0, lost: 0, push: 0, decided: 0, winRate: null };
+            const dec = c.won + c.lost;
+            return { vol, won: c.won, lost: c.lost, push: c.push, decided: dec, winRate: dec ? (c.won / dec) * 100 : null };
+          });
+          // total du cas de code couleur (le pattern FDR) dans ce contexte, toutes
+          // volatilités confondues — répond directement à "et pour les cas du code
+          // couleur ?" sans avoir à additionner les 3 colonnes à la main
+          const totalWon = cells.reduce((s, c) => s + c.won, 0);
+          const totalLost = cells.reduce((s, c) => s + c.lost, 0);
+          const totalDec = totalWon + totalLost;
+          return { pattern, label: fdrPatternLabels[pattern] || pattern, cells, total: { won: totalWon, lost: totalLost, decided: totalDec, winRate: totalDec ? (totalWon / totalDec) * 100 : null } };
+        });
+    };
+    const decisionMatrixByContext = {
+      domicile: buildPatternVolMatrix(resolved.filter((b) => b.venueContext === "domicile")),
+      neutre: buildPatternVolMatrix(resolved.filter((b) => b.venueContext === "neutre")),
+      exterieur: buildPatternVolMatrix(resolved.filter((b) => b.venueContext === "exterieur")),
+    };
+
+    return { won, lost, push, decided, winRate, cumul: Number(cumul.toFixed(2)), series, avgEdge, total: bets.length, categories, verdicts, fdrPatterns, volatilites, decisionMatrix, venueContexts, terrainImpact, decisionMatrixVenue, decisionMatrixByContext, byRuleUsed, lostPostMortem };
   }, [bets]);
 
   const tabs = [
