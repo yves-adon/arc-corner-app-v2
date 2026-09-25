@@ -5801,7 +5801,7 @@ function ResultBtn({ active, color, onClick, children }) {
     </button>
   );
 }
-function HistoriqueTab({ bets, setResult, removeBet, addManualBet, updateCote }) {
+function HistoriqueTab({ bets, setResult, removeBet, addManualBet, updateCote, updateVenueContext }) {
   // trié par date à l'AFFICHAGE, jamais dépendant de l'ordre de stockage — une fusion
   // multi-appareils ne garantit aucun ordre particulier dans le tableau brut
   const sortedBets = useMemo(() => [...bets].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)), [bets]);
@@ -5837,6 +5837,31 @@ function HistoriqueTab({ bets, setResult, removeBet, addManualBet, updateCote })
             <ResultBtn active={b.result === "push"} color={C.jouable} onClick={() => setResult(b.id, "push")}><Minus size={13} /> Push</ResultBtn>
             <ResultBtn active={b.result === "pending"} color={C.dim} onClick={() => setResult(b.id, "pending")}><RotateCcw size={13} /></ResultBtn>
           </div>
+          {b.category === "fdr" && updateVenueContext && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 9.5, color: b.venueContext ? C.faint : C.jouable }}>
+                {b.venueContext ? "contexte terrain" : "⚠️ contexte terrain manquant (match d'avant ce suivi) —"}
+              </span>
+              {Object.entries(FDR_VENUE_CONTEXT_META).map(([id, meta]) => (
+                <button
+                  key={id}
+                  onClick={() => updateVenueContext(b.id, id)}
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 700,
+                    padding: "3px 7px",
+                    borderRadius: 6,
+                    border: `1px solid ${b.venueContext === id ? meta.color + "88" : C.line}`,
+                    background: b.venueContext === id ? meta.color + "22" : "transparent",
+                    color: b.venueContext === id ? meta.color : C.faint,
+                    cursor: "pointer",
+                  }}
+                >
+                  {meta.emoji} {meta.label}
+                </button>
+              ))}
+            </div>
+          )}
           {b.detailA && b.detailB && (
             <Collapsible
               title={b.result === "lost" ? "🔎 Détail équipe par équipe (perdu — à examiner)" : "🔎 Détail équipe par équipe"}
@@ -6223,6 +6248,18 @@ const FDR_PATTERN_META = {
 };
 const fdrPatternLabels = Object.fromEntries(Object.entries(FDR_PATTERN_META).map(([k, v]) => [k, `${v.emoji} ${v.label}`]));
 
+/* Contexte terrain — même 3 états que le toggle domicile/neutre/extérieur du panneau
+   FDR (venue), figé sur chaque pari au moment de l'ajout (voir venueContext dans
+   StrategyConvergence.handleAdd). Sert à croiser "contexte FDR" avec "qui reçoit" dans
+   le Bilan — un pari classé "Équilibré, tirant haut" n'a pas forcément le même taux de
+   réussite selon que l'équipe qu'on suit reçoit, joue dehors ou est sur terrain neutre. */
+const FDR_VENUE_CONTEXT_META = {
+  domicile: { label: "Domicile", emoji: "🏠", color: C.solide },
+  neutre: { label: "Neutre", emoji: "⚪", color: C.jouable },
+  exterieur: { label: "Extérieur", emoji: "🚌", color: C.fragile },
+};
+const venueContextLabels = Object.fromEntries(Object.entries(FDR_VENUE_CONTEXT_META).map(([k, v]) => [k, `${v.emoji} ${v.label}`]));
+
 /* Bloc "Type de match" — visuel unique et immédiat qui répond à "sur quel genre de
    match je suis en train de regarder ?" (contexte FDR + volatilité des deux équipes),
    sans avoir à recomposer ça mentalement depuis les chiffres épars du panneau. Quand
@@ -6281,7 +6318,7 @@ function MatchTypeBadge({ rA, rB, inputsA, inputsB, bets }) {
   );
 }
 
-function StrategyConvergence({ teamAName, teamBName, proj, rA, rB, inputsA, inputsB, onAddBet }) {
+function StrategyConvergence({ teamAName, teamBName, proj, rA, rB, inputsA, inputsB, onAddBet, venue }) {
   const [tcFavori, setTcFavori] = useState(null); // "A" | "B" | null
   const [fsFavori, setFsFavori] = useState(null);
   const [tcOver, setTcOver] = useState(false);
@@ -6337,6 +6374,11 @@ function StrategyConvergence({ teamAName, teamBName, proj, rA, rB, inputsA, inpu
       fdrBandB: rB.band.label,
       fdrScoreB: Number(rB.score.toFixed(2)),
       fdrPattern,
+      // contexte terrain figé à l'ajout, du point de vue de l'équipe A (même convention
+      // que venueForA dans FdrMatchSection) — permet de croiser plus tard le contexte FDR
+      // avec domicile/neutre/extérieur dans le Bilan, chose impossible pour les paris
+      // ajoutés avant ce champ (ils resteront simplement absents de ce nouveau tableau)
+      venueContext: venue === "A" ? "domicile" : venue === "B" ? "exterieur" : "neutre",
       volatiliteWorst,
       bttsFreqAlert,
       // détail par équipe (pas juste "la pire des deux") — pour pouvoir, plus tard,
@@ -6761,7 +6803,7 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h, onAddB
         })()}
 
         {inputsA && inputsB && (
-          <StrategyConvergence teamAName={teamAName} teamBName={teamBName} proj={computeGoalsProjection(inputsA, inputsB)} rA={rA} rB={rB} inputsA={inputsA} inputsB={inputsB} onAddBet={onAddBet} />
+          <StrategyConvergence teamAName={teamAName} teamBName={teamBName} proj={computeGoalsProjection(inputsA, inputsB)} rA={rA} rB={rB} inputsA={inputsA} inputsB={inputsB} onAddBet={onAddBet} venue={venue} />
         )}
 
         <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic" }}>
@@ -6910,6 +6952,78 @@ function BilanTab({ stats }) {
                 </span>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+      {stats.venueContexts && stats.venueContexts.length > 0 && (
+        <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+          <SectionTitle sub="domicile/neutre/extérieur, du point de vue de l'équipe A — absent des paris ajoutés avant ce suivi">Par contexte terrain</SectionTitle>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {stats.venueContexts.map((v) => (
+              <div key={v.venueContext} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5 }}>
+                <span style={{ color: C.text }}>{v.label}</span>
+                <span style={{ fontFamily: FONT_MONO, color: C.dim, display: "flex", alignItems: "center", gap: 8 }}>
+                  <span>{v.won}G / {v.lost}P{v.push ? ` / ${v.push} push` : ""}</span>
+                  <b style={{ color: v.winRate === null ? C.faint : v.winRate >= 50 ? C.solide : C.fragile, minWidth: 34, textAlign: "right" }}>
+                    {v.winRate !== null ? `${v.winRate.toFixed(0)}%` : "—"}
+                  </b>
+                </span>
+              </div>
+            ))}
+          </div>
+          {stats.terrainImpact ? (
+            <div
+              style={{
+                padding: "7px 10px",
+                borderRadius: 8,
+                background: (stats.terrainImpact.gap >= 0 ? C.solide : C.fragile) + "18",
+                border: `1px solid ${stats.terrainImpact.gap >= 0 ? C.solide : C.fragile}55`,
+                fontSize: 11.5,
+                fontWeight: 700,
+                color: stats.terrainImpact.gap >= 0 ? C.solide : C.fragile,
+              }}
+            >
+              Impact terrain (domicile − extérieur) : {stats.terrainImpact.gap >= 0 ? "+" : ""}{stats.terrainImpact.gap.toFixed(0)} pts — {stats.terrainImpact.domicileWinRate.toFixed(0)}% ({stats.terrainImpact.domicileDec}) vs {stats.terrainImpact.exterieurWinRate.toFixed(0)}% ({stats.terrainImpact.exterieurDec})
+            </div>
+          ) : (
+            <div style={{ fontSize: 9, color: C.faint, fontStyle: "italic" }}>impact terrain affiché dès qu'il y a au moins 3 paris décidés côté domicile ET côté extérieur</div>
+          )}
+        </div>
+      )}
+      {stats.decisionMatrixVenue && stats.decisionMatrixVenue.length > 0 && (
+        <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+          <SectionTitle sub="est-ce qu'un contexte FDR se comporte différemment selon que l'équipe suivie reçoit ou joue dehors">Matrice de décision (contexte FDR × terrain)</SectionTitle>
+          <div style={{ overflowX: "auto" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr repeat(3, 72px)", gap: "4px 6px", minWidth: 380 }}>
+              <span></span>
+              {["domicile", "neutre", "exterieur"].map((vc) => (
+                <span key={vc} style={{ fontSize: 9.5, color: C.faint, textAlign: "center" }}>{FDR_VENUE_CONTEXT_META[vc].label}</span>
+              ))}
+              {stats.decisionMatrixVenue.map((row) => (
+                <React.Fragment key={row.pattern}>
+                  <span style={{ fontSize: 10.5, color: C.text, alignSelf: "center" }}>{row.label}</span>
+                  {row.cells.map((cell) => (
+                    <div
+                      key={cell.vc}
+                      style={{
+                        textAlign: "center",
+                        padding: "5px 2px",
+                        borderRadius: 6,
+                        fontSize: 10.5,
+                        fontFamily: FONT_MONO,
+                        background: cell.decided === 0 ? "transparent" : (cell.winRate >= 50 ? C.solide : C.fragile) + "18",
+                        color: cell.decided === 0 ? C.faint : cell.winRate >= 50 ? C.solide : C.fragile,
+                      }}
+                    >
+                      {cell.decided === 0 ? "—" : `${cell.winRate.toFixed(0)}% (${cell.decided})`}
+                    </div>
+                  ))}
+                </React.Fragment>
+              ))}
+            </div>
+          </div>
+          <div style={{ fontSize: 9, color: C.faint, fontStyle: "italic" }}>
+            le nombre entre parenthèses est le nombre de paris décidés dans cette case — une case avec 1-2 paris ne veut encore rien dire de fiable
           </div>
         </div>
       )}
@@ -7167,6 +7281,11 @@ export default function App() {
   const setResult = (id, result) => persist(bets.map((b) => (b.id === id ? { ...b, result } : b)));
   const removeBet = (id) => persist(bets.filter((b) => b.id !== id));
   const updateCote = (id, cote) => persist(bets.map((b) => (b.id === id ? { ...b, cote } : b)));
+  // reconstruction a posteriori du contexte terrain pour les paris FDR ajoutés avant ce
+  // champ : le résultat (won/lost) est déjà connu grâce au tracker, il ne manque que la
+  // donnée objective "qui recevait" sur ce match précis — pas besoin de retoucher le
+  // reste du pari, juste ce champ, saisi une fois pour toutes depuis l'Historique
+  const updateVenueContext = (id, venueContext) => persist(bets.map((b) => (b.id === id ? { ...b, venueContext } : b)));
 
   const stats = useMemo(() => {
     // trié explicitement par date — ne JAMAIS supposer que le tableau brut est déjà
@@ -7262,6 +7381,55 @@ export default function App() {
       })
       .sort((a, b) => (volOrder[a.vol] ?? 9) - (volOrder[b.vol] ?? 9));
 
+    // taux de réussite par contexte terrain (domicile / neutre / extérieur, du point de
+    // vue de l'équipe A) — capturé à l'ajout via venueContext ; absent des paris ajoutés
+    // avant ce champ, donc n'apparaît que progressivement au fil des nouveaux paris
+    const venueContextOrder = { domicile: 0, neutre: 1, exterieur: 2 };
+    const byVenueContext = {};
+    resolved.forEach((b) => {
+      if (!b.venueContext) return;
+      if (!byVenueContext[b.venueContext]) byVenueContext[b.venueContext] = { won: 0, lost: 0, push: 0 };
+      byVenueContext[b.venueContext][b.result === "won" ? "won" : b.result === "lost" ? "lost" : "push"]++;
+    });
+    const venueContexts = Object.entries(byVenueContext)
+      .map(([venueContext, c]) => {
+        const dec = c.won + c.lost;
+        return { venueContext, label: venueContextLabels[venueContext] || venueContext, won: c.won, lost: c.lost, push: c.push, decided: dec, winRate: dec ? (c.won / dec) * 100 : null };
+      })
+      .sort((a, b) => (venueContextOrder[a.venueContext] ?? 9) - (venueContextOrder[b.venueContext] ?? 9));
+
+    // impact terrain = écart de taux de réussite domicile − extérieur, sur les paris qui
+    // ont les deux jambes avec assez de recul (≥3 décidés chacune) — mesure directe de
+    // l'effet du contexte terrain sur TES résultats, pas un a priori théorique
+    const domicileStat = byVenueContext.domicile;
+    const exterieurStat = byVenueContext.exterieur;
+    const domicileDec = domicileStat ? domicileStat.won + domicileStat.lost : 0;
+    const exterieurDec = exterieurStat ? exterieurStat.won + exterieurStat.lost : 0;
+    const terrainImpact =
+      domicileDec >= 3 && exterieurDec >= 3
+        ? {
+            domicileWinRate: (domicileStat.won / domicileDec) * 100,
+            exterieurWinRate: (exterieurStat.won / exterieurDec) * 100,
+            gap: (domicileStat.won / domicileDec) * 100 - (exterieurStat.won / exterieurDec) * 100,
+            domicileDec,
+            exterieurDec,
+          }
+        : null;
+
+    // matrice croisée contexte FDR × contexte terrain — pour repérer des cas comme
+    // "équilibré mixte" qui se comporte différemment selon que l'équipe suivie reçoit ou
+    // joue dehors, alors qu'un seul des deux tableaux séparés ne le montrerait pas
+    const matrixVenueColOrder = ["domicile", "neutre", "exterieur"];
+    const byMatrixVenue = {};
+    resolved.forEach((b) => {
+      const pattern = b.fdrScoreA !== undefined && b.fdrScoreB !== undefined ? classifyFdrPattern(b.fdrScoreA, b.fdrScoreB) : b.fdrPattern;
+      const vc = b.venueContext;
+      if (!pattern || !vc) return;
+      byMatrixVenue[pattern] = byMatrixVenue[pattern] || {};
+      byMatrixVenue[pattern][vc] = byMatrixVenue[pattern][vc] || { won: 0, lost: 0, push: 0 };
+      byMatrixVenue[pattern][vc][b.result === "won" ? "won" : b.result === "lost" ? "lost" : "push"]++;
+    });
+
     // matrice croisée contexte FDR × volatilité — les deux tableaux séparés ci-dessus ne
     // peuvent pas montrer un cas comme "tirant haut + volatilité forte" vs "tirant haut +
     // volatilité faible", qui peuvent avoir des taux de réussite très différents alors
@@ -7326,7 +7494,20 @@ export default function App() {
         }),
       }));
 
-    return { won, lost, push, decided, winRate, cumul: Number(cumul.toFixed(2)), series, avgEdge, total: bets.length, categories, verdicts, fdrPatterns, volatilites, decisionMatrix, byRuleUsed, lostPostMortem };
+    const decisionMatrixVenue = matrixRowOrder
+      .filter((pattern) => byMatrixVenue[pattern])
+      .map((pattern) => ({
+        pattern,
+        label: fdrPatternLabels[pattern] || pattern,
+        cells: matrixVenueColOrder.map((vc) => {
+          const c = byMatrixVenue[pattern][vc];
+          if (!c) return { vc, won: 0, lost: 0, push: 0, decided: 0, winRate: null };
+          const dec = c.won + c.lost;
+          return { vc, won: c.won, lost: c.lost, push: c.push, decided: dec, winRate: dec ? (c.won / dec) * 100 : null };
+        }),
+      }));
+
+    return { won, lost, push, decided, winRate, cumul: Number(cumul.toFixed(2)), series, avgEdge, total: bets.length, categories, verdicts, fdrPatterns, volatilites, decisionMatrix, venueContexts, terrainImpact, decisionMatrixVenue, byRuleUsed, lostPostMortem };
   }, [bets]);
 
   const tabs = [
@@ -7480,7 +7661,7 @@ export default function App() {
         ) : tab === "comparateur" ? (
           <ComparateurTab teamA={teamA} setTeamA={setTeamA} teamB={teamB} setTeamB={setTeamB} lignes={lignes} setLignes={setLignes} individuels={individuels} setIndividuels={setIndividuels} h2h={h2h} setH2h={setH2h} onAddBet={addBet} bets={bets} />
         ) : tab === "historique" ? (
-          <HistoriqueTab bets={bets} setResult={setResult} removeBet={removeBet} addManualBet={addBet} updateCote={updateCote} />
+          <HistoriqueTab bets={bets} setResult={setResult} removeBet={removeBet} addManualBet={addBet} updateCote={updateCote} updateVenueContext={updateVenueContext} />
         ) : (
           <BilanTab stats={stats} />
         )}
