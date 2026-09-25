@@ -5801,14 +5801,73 @@ function ResultBtn({ active, color, onClick, children }) {
     </button>
   );
 }
-function HistoriqueTab({ bets, setResult, removeBet, addManualBet, updateCote, updateVenueContext }) {
+function HistoriqueTab({ bets, setResult, removeBet, addManualBet, updateCote, updateVenueContext, updateVenueContextBulk }) {
+  // sélection groupée pour le backfill du contexte terrain — évite de cocher 119 paris
+  // un par un : on sélectionne un lot (au pire "tout sélectionner") puis un seul clic
+  // sur Domicile/Neutre/Extérieur l'applique à tout le lot d'un coup
+  const [checkedIds, setCheckedIds] = useState(() => new Set());
+  const toggleChecked = (id) =>
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   // trié par date à l'AFFICHAGE, jamais dépendant de l'ordre de stockage — une fusion
   // multi-appareils ne garantit aucun ordre particulier dans le tableau brut
   const sortedBets = useMemo(() => [...bets].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)), [bets]);
+  const missingCtx = useMemo(() => sortedBets.filter((b) => b.category === "fdr" && !b.venueContext), [sortedBets]);
+  const allMissingChecked = missingCtx.length > 0 && missingCtx.every((b) => checkedIds.has(b.id));
+  const applyBulk = (venueContext) => {
+    if (!updateVenueContextBulk || checkedIds.size === 0) return;
+    updateVenueContextBulk([...checkedIds], venueContext);
+    setCheckedIds(new Set());
+  };
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <QuickAddForm onAdd={addManualBet} />
       {!bets.length && <EmptyState title="Aucun pari suivi" text="Ajoute un pari terminé ci-dessus, ou utilise le bouton « Suivre » depuis l'onglet Comparateur." />}
+      {missingCtx.length > 0 && updateVenueContextBulk && (
+        <div style={{ background: C.surface, border: `1px solid ${C.jouable}55`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ fontSize: 11.5, color: C.text, fontWeight: 700 }}>
+            {missingCtx.length} pari(s) FDR sans contexte terrain
+          </div>
+          <div style={{ fontSize: 9.5, color: C.faint }}>
+            coche les paris concernés (ou tout sélectionner), puis applique un contexte en un clic — corrige ensuite les exceptions individuellement ci-dessous
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: C.text, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={allMissingChecked}
+                onChange={() => setCheckedIds(allMissingChecked ? new Set() : new Set(missingCtx.map((b) => b.id)))}
+              />
+              tout sélectionner ({checkedIds.size}/{missingCtx.length})
+            </label>
+          </div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {Object.entries(FDR_VENUE_CONTEXT_META).map(([id, meta]) => (
+              <button
+                key={id}
+                disabled={checkedIds.size === 0}
+                onClick={() => applyBulk(id)}
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  padding: "6px 10px",
+                  borderRadius: 6,
+                  border: `1px solid ${checkedIds.size === 0 ? C.line : meta.color + "88"}`,
+                  background: checkedIds.size === 0 ? "transparent" : meta.color + "22",
+                  color: checkedIds.size === 0 ? C.faint : meta.color,
+                  cursor: checkedIds.size === 0 ? "default" : "pointer",
+                }}
+              >
+                {meta.emoji} Appliquer {meta.label} à la sélection
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       {sortedBets.map((b) => (
         <div key={b.id} style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
@@ -5839,6 +5898,9 @@ function HistoriqueTab({ bets, setResult, removeBet, addManualBet, updateCote, u
           </div>
           {b.category === "fdr" && updateVenueContext && (
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              {!b.venueContext && updateVenueContextBulk && (
+                <input type="checkbox" checked={checkedIds.has(b.id)} onChange={() => toggleChecked(b.id)} style={{ marginRight: 2 }} />
+              )}
               <span style={{ fontSize: 9.5, color: b.venueContext ? C.faint : C.jouable }}>
                 {b.venueContext ? "contexte terrain" : "⚠️ contexte terrain manquant (match d'avant ce suivi) —"}
               </span>
@@ -7342,6 +7404,15 @@ export default function App() {
   // donnée objective "qui recevait" sur ce match précis — pas besoin de retoucher le
   // reste du pari, juste ce champ, saisi une fois pour toutes depuis l'Historique
   const updateVenueContext = (id, venueContext) => persist(bets.map((b) => (b.id === id ? { ...b, venueContext } : b)));
+  // même chose mais pour un lot de paris d'un coup — coche 119 paris un par un est long,
+  // donc on permet de sélectionner un groupe (ex. "tous ceux sans contexte") et
+  // d'appliquer un seul contexte en un clic ; ne remplace pas la vérité terrain réelle
+  // de chaque match (ça reste une supposition en masse), mais réduit le travail manuel
+  // à une poignée de clics + correction des exceptions au cas par cas ensuite
+  const updateVenueContextBulk = (ids, venueContext) => {
+    const idSet = new Set(ids);
+    persist(bets.map((b) => (idSet.has(b.id) ? { ...b, venueContext } : b)));
+  };
 
   const stats = useMemo(() => {
     // trié explicitement par date — ne JAMAIS supposer que le tableau brut est déjà
@@ -7756,7 +7827,7 @@ export default function App() {
         ) : tab === "comparateur" ? (
           <ComparateurTab teamA={teamA} setTeamA={setTeamA} teamB={teamB} setTeamB={setTeamB} lignes={lignes} setLignes={setLignes} individuels={individuels} setIndividuels={setIndividuels} h2h={h2h} setH2h={setH2h} onAddBet={addBet} bets={bets} />
         ) : tab === "historique" ? (
-          <HistoriqueTab bets={bets} setResult={setResult} removeBet={removeBet} addManualBet={addBet} updateCote={updateCote} updateVenueContext={updateVenueContext} />
+          <HistoriqueTab bets={bets} setResult={setResult} removeBet={removeBet} addManualBet={addBet} updateCote={updateCote} updateVenueContext={updateVenueContext} updateVenueContextBulk={updateVenueContextBulk} />
         ) : (
           <BilanTab stats={stats} />
         )}
