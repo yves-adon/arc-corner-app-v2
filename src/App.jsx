@@ -6379,7 +6379,7 @@ const venueContextLabels = Object.fromEntries(Object.entries(FDR_VENUE_CONTEXT_M
    sans avoir à recomposer ça mentalement depuis les chiffres épars du panneau. Quand
    un historique de paris existe pour cette combinaison EXACTE (contexte × volatilité),
    affiche aussi le taux de réussite déjà observé dans ce cas précis. */
-function MatchTypeBadge({ rA, rB, inputsA, inputsB, bets }) {
+function MatchTypeBadge({ rA, rB, inputsA, inputsB, bets, venueContext }) {
   const pattern = classifyFdrPattern(rA.score, rB.score);
   const meta = FDR_PATTERN_META[pattern];
   const volA = volatiliteButsLabel(inputsA.volatilite).label;
@@ -6387,6 +6387,11 @@ function MatchTypeBadge({ rA, rB, inputsA, inputsB, bets }) {
   const volWorst = volA === "Forte" || volB === "Forte" ? "Forte" : volA === "Moyenne" || volB === "Moyenne" ? "Moyenne" : "Faible";
   const volColor = volatiliteButsLabel(volWorst === "Faible" ? 0 : volWorst === "Moyenne" ? 1.5 : 2.5).color;
 
+  // recommandation scindée par contexte terrain — avant, un match analysé en Neutre ou
+  // Extérieur piochait quand même dans TOUT l'historique (dont l'écrasante majorité de
+  // paris pris en Domicile), ce qui revenait en pratique à toujours donner la
+  // recommandation "cas Domicile" peu importe le contexte affiché. Maintenant on ne
+  // regarde que les paris qui partagent le même contexte terrain que celui sélectionné
   const historique = useMemo(() => {
     if (!bets || !bets.length) return null;
     let won = 0;
@@ -6394,12 +6399,13 @@ function MatchTypeBadge({ rA, rB, inputsA, inputsB, bets }) {
     bets.forEach((b) => {
       if (b.category !== "fdr" || b.fdrScoreA === undefined || b.fdrScoreB === undefined) return;
       if (classifyFdrPattern(b.fdrScoreA, b.fdrScoreB) !== pattern || b.volatiliteWorst !== volWorst) return;
+      if (b.venueContext !== venueContext) return;
       if (b.result === "won") won++;
       else if (b.result === "lost") lost++;
     });
     const decided = won + lost;
     return decided ? { won, lost, decided, winRate: (won / decided) * 100 } : null;
-  }, [bets, pattern, volWorst]);
+  }, [bets, pattern, volWorst, venueContext]);
 
   // recommandation directe (au lieu de laisser interpréter le %) — basée UNIQUEMENT sur
   // ton propre historique pour ce cas exact (contexte × volatilité), pas sur un modèle
@@ -6426,7 +6432,7 @@ function MatchTypeBadge({ rA, rB, inputsA, inputsB, bets }) {
         {reco.label}
       </div>
       <div style={{ fontSize: 9, color: C.faint, fontStyle: "italic" }}>
-        recommandation basée sur TON historique réel pour ce cas exact — pas un modèle théorique
+        recommandation basée sur TON historique réel pour ce cas exact (contexte {FDR_VENUE_CONTEXT_META[venueContext].label.toLowerCase()} inclus) — pas un modèle théorique
       </div>
     </div>
   );
@@ -6781,7 +6787,55 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h, onAddB
           <FdrGaugeBar teamAName={teamAName} teamAScore={rA.score} teamAColor={C.teamA} teamBName={teamBName} teamBScore={rB.score} teamBColor={C.teamB} />
         )}
 
-        {rA && rB && inputsA && inputsB && <MatchTypeBadge rA={rA} rB={rB} inputsA={inputsA} inputsB={inputsB} bets={bets} />}
+        {rA && rB && inputsA && inputsB && <MatchTypeBadge rA={rA} rB={rB} inputsA={inputsA} inputsB={inputsB} bets={bets} venueContext={venue === "A" ? "domicile" : venue === "B" ? "exterieur" : "neutre"} />}
+
+        {venueSnapshot && venueSnapshot.every((v) => v.pattern) && (() => {
+          // robustesse du pattern FDR pour CE match précis : compare les 3 contextes
+          // hypothétiques (le vrai + les 2 autres) — si les 3 tombent sur le même
+          // pattern, la classification à domicile ne doit rien au contexte et reste
+          // valable même si tu t'es trompé de toggle ; si elle diffère, la prédiction
+          // affichée dépend fortement de si le match se joue vraiment à domicile
+          const patterns = new Set(venueSnapshot.map((v) => v.pattern));
+          const stable = patterns.size === 1;
+          const currentCtx = venue === "A" ? "domicile" : venue === "B" ? "exterieur" : "neutre";
+          return (
+            <div
+              style={{
+                padding: "8px 10px",
+                borderRadius: 8,
+                background: (stable ? C.solide : C.jouable) + "18",
+                border: `1px solid ${(stable ? C.solide : C.jouable)}55`,
+                fontSize: 11,
+                color: stable ? C.solide : C.jouable,
+                display: "flex",
+                flexDirection: "column",
+                gap: 4,
+              }}
+            >
+              <b>
+                {stable
+                  ? "✅ Pattern stable — même classification quel que soit le contexte terrain"
+                  : "⚠️ Pattern sensible au contexte — change selon domicile/neutre/extérieur"}
+              </b>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", fontFamily: FONT_MONO, fontSize: 10, color: C.dim }}>
+                {venueSnapshot.map((v) => {
+                  const pMeta = FDR_PATTERN_META[v.pattern];
+                  const vMeta = FDR_VENUE_CONTEXT_META[v.venueContext];
+                  return (
+                    <span key={v.venue} style={{ fontWeight: v.venueContext === currentCtx ? 700 : 400 }}>
+                      {vMeta.emoji} {vMeta.label}{v.venueContext === currentCtx ? " (affiché)" : ""} : {pMeta.emoji} {pMeta.label}
+                    </span>
+                  );
+                })}
+              </div>
+              {!stable && (
+                <span style={{ fontSize: 9.5, fontStyle: "italic", color: C.faint }}>
+                  vérifie bien que le toggle ci-dessus correspond au vrai lieu du match avant d'ajouter au bilan — la recommandation historique n'est fiable que pour le bon contexte
+                </span>
+              )}
+            </div>
+          );
+        })()}
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <Card name={teamAName} color={C.teamA} r={rA} missing={!inputsB} oppInputs={inputsB} />
@@ -7226,11 +7280,22 @@ function BilanTab({ stats }) {
         const rows = stats.decisionMatrixByContext && stats.decisionMatrixByContext[vc];
         if (!rows || rows.length === 0) return null;
         const meta = FDR_VENUE_CONTEXT_META[vc];
+        // Domicile reste le contexte de travail normal de l'app (comme avant) ; Neutre
+        // et Extérieur sont volontairement traités comme des données d'observation —
+        // utiles pour voir si l'effet terrain existe, mais pas le flux principal
+        const isObservation = vc !== "domicile";
         return (
           <div key={vc} style={{ background: C.surface, border: `1px solid ${meta.color}55`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
-            <SectionTitle sub={`même croisement contexte FDR × volatilité que ci-dessus, mais limité aux paris joués en contexte ${meta.label.toLowerCase()}`}>
-              {meta.emoji} Matrice de décision — {meta.label}
-            </SectionTitle>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <SectionTitle sub={`même croisement contexte FDR × volatilité que ci-dessus, mais limité aux paris joués en contexte ${meta.label.toLowerCase()}`}>
+                {meta.emoji} Matrice de décision — {meta.label}
+              </SectionTitle>
+              {isObservation && (
+                <span style={{ fontSize: 8.5, fontWeight: 700, padding: "2px 6px", borderRadius: 5, background: C.faint + "22", color: C.faint, textTransform: "uppercase", letterSpacing: 0.3 }}>
+                  observation
+                </span>
+              )}
+            </div>
             <div style={{ overflowX: "auto" }}>
               <div style={{ display: "grid", gridTemplateColumns: "1fr repeat(3, 72px) 72px", gap: "4px 6px", minWidth: 380 }}>
                 <span></span>
