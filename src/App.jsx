@@ -6693,11 +6693,13 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h, onAddB
   // snapshot des 3 contextes terrain (A domicile / neutre / B domicile), figé au moment
   // où le pari est ajouté au Bilan — répond à "voir aussi le code couleur pour les
   // autres contextes" pour CE match précis, sans dépendre du toggle affiché à l'écran.
-  // Attention : PPM/forme dépendent eux-mêmes du contexte (profil domicile vs extérieur
-  // de chaque équipe, voir computeTeamFDRInputs), donc les 3 variantes ne sont pas un
-  // simple recalcul du score avec une note terrain différente — les stats d'entrée
-  // changent aussi. Ceci ne peut être fait qu'au moment de l'analyse (ici) : impossible
-  // de le reconstituer plus tard pour un pari déjà enregistré sans ce snapshot.
+  // Attention : PPM/forme/volatilité dépendent eux-mêmes du contexte (profil domicile vs
+  // extérieur de chaque équipe, voir computeTeamFDRInputs — le mélange pondéré par lieu
+  // s'applique aussi à volatilite/volatiliteAttaque/volatiliteDefense, pas seulement à
+  // ppm/forme), donc les 3 variantes ne sont pas un simple recalcul du score avec une
+  // note terrain différente — les stats d'entrée changent aussi, volatilité comprise.
+  // Ceci ne peut être fait qu'au moment de l'analyse (ici) : impossible de le
+  // reconstituer plus tard pour un pari déjà enregistré sans ce snapshot.
   const venueSnapshot = ["A", "N", "B"].map((v) => {
     const vForA = v === "A" ? "D" : v === "B" ? "E" : "N";
     const vForB = v === "B" ? "D" : v === "A" ? "E" : "N";
@@ -6705,12 +6707,26 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h, onAddB
     const iB = computeTeamFDRInputs(matchesB, formeWindow, vForB);
     const resA = iB ? computeFDR({ ppm: iB.ppm, forme: iB.formePoints, formeWindow, venueId: vForA, h2hScore: h2hA.score }) : null;
     const resB = iA ? computeFDR({ ppm: iA.ppm, forme: iA.formePoints, formeWindow, venueId: vForB, h2hScore: h2hB.score }) : null;
+    // volatilité propre à CE contexte hypothétique (pas réutilisée depuis le vrai match)
+    // — même logique que volatiliteWorst plus bas dans handleAdd, mais avec iA/iB
+    // recalculés pour ce lieu précis plutôt que les inputsA/inputsB du contexte réel
+    const volLabelA = iA ? volatiliteButsLabel(iA.volatilite).label : null;
+    const volLabelB = iB ? volatiliteButsLabel(iB.volatilite).label : null;
+    const volatiliteWorst =
+      volLabelA && volLabelB
+        ? volLabelA === "Forte" || volLabelB === "Forte"
+          ? "Forte"
+          : volLabelA === "Moyenne" || volLabelB === "Moyenne"
+          ? "Moyenne"
+          : "Faible"
+        : null;
     return {
       venue: v,
       venueContext: v === "A" ? "domicile" : v === "B" ? "exterieur" : "neutre",
       scoreA: resA ? resA.score : null,
       scoreB: resB ? resB.score : null,
       pattern: resA && resB ? classifyFdrPattern(resA.score, resB.score) : null,
+      volatiliteWorst,
     };
   });
 
@@ -7343,6 +7359,76 @@ function BilanTab({ stats }) {
           </div>
         );
       })}
+      {stats.decisionMatrixHypothetical && ["domicile", "neutre", "exterieur"].some((vc) => stats.decisionMatrixHypothetical[vc].length > 0) && (
+        <div style={{ background: C.surface, border: `1px dashed ${C.dim}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <SectionTitle sub="ne mesure PAS l'effet terrain réel (voir les 3 matrices au-dessus pour ça) — teste si le pattern FDR reste fiable même quand on ignore quel contexte a vraiment été joué">
+              🧪 Vue hypothétique — robustesse des patterns
+            </SectionTitle>
+            <span style={{ fontSize: 8.5, fontWeight: 700, padding: "2px 6px", borderRadius: 5, background: C.dim + "22", color: C.dim, textTransform: "uppercase", letterSpacing: 0.3 }}>
+              expérimental
+            </span>
+          </div>
+          <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic" }}>
+            même résultat réel d'un match compté sous ses 3 patterns hypothétiques (domicile/neutre/extérieur) — pas 3 vrais matchs, un seul répété 3 fois sous 3 étiquettes différentes
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {["domicile", "neutre", "exterieur"].map((vc) => {
+              const rows = stats.decisionMatrixHypothetical[vc];
+              if (!rows || rows.length === 0) return null;
+              const meta = FDR_VENUE_CONTEXT_META[vc];
+              const matrixRows = stats.decisionMatrixHypotheticalVol ? stats.decisionMatrixHypotheticalVol[vc] : [];
+              return (
+                <div key={vc} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <span style={{ fontSize: 10.5, color: C.text, fontWeight: 700 }}>{meta.emoji} {meta.label} — par contexte FDR</span>
+                  {rows.map((r) => (
+                    <div key={r.pattern} style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5 }}>
+                      <span style={{ color: C.dim }}>{r.label}</span>
+                      <span style={{ fontFamily: FONT_MONO, color: r.winRate === null ? C.faint : r.winRate >= 50 ? C.solide : C.fragile, fontWeight: 700 }}>
+                        {r.winRate !== null ? `${r.winRate.toFixed(0)}% (${r.decided})` : "—"}
+                      </span>
+                    </div>
+                  ))}
+                  {matrixRows && matrixRows.length > 0 && (
+                    <div style={{ overflowX: "auto", marginTop: 4 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr repeat(3, 68px)", gap: "4px 6px", minWidth: 340 }}>
+                        <span></span>
+                        {["Faible", "Moyenne", "Forte"].map((vol) => (
+                          <span key={vol} style={{ fontSize: 9, color: C.faint, textAlign: "center" }}>{vol}</span>
+                        ))}
+                        {matrixRows.map((row) => (
+                          <React.Fragment key={row.pattern}>
+                            <span style={{ fontSize: 10, color: C.dim, alignSelf: "center" }}>{row.label}</span>
+                            {row.cells.map((cell) => (
+                              <div
+                                key={cell.vol}
+                                style={{
+                                  textAlign: "center",
+                                  padding: "4px 2px",
+                                  borderRadius: 6,
+                                  fontSize: 10,
+                                  fontFamily: FONT_MONO,
+                                  background: cell.decided === 0 ? "transparent" : (cell.winRate >= 50 ? C.solide : C.fragile) + "14",
+                                  color: cell.decided === 0 ? C.faint : cell.winRate >= 50 ? C.solide : C.fragile,
+                                }}
+                              >
+                                {cell.decided === 0 ? "—" : `${cell.winRate.toFixed(0)}% (${cell.decided})`}
+                              </div>
+                            ))}
+                          </React.Fragment>
+                        ))}
+                      </div>
+                      <div style={{ fontSize: 8.5, color: C.faint, fontStyle: "italic", marginTop: 3 }}>
+                        volatilité recalculée pour chaque contexte hypothétique (pas réutilisée depuis le vrai match)
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
       {stats.decisionMatrix && stats.decisionMatrix.length > 0 && (
         <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
           <SectionTitle sub="croise les deux tableaux ci-dessus — certaines cases seront clairsemées tant que l'échantillon est petit">Matrice de décision (contexte FDR × volatilité)</SectionTitle>
@@ -7876,7 +7962,76 @@ export default function App() {
       exterieur: buildPatternVolMatrix(resolved.filter((b) => b.venueContext === "exterieur")),
     };
 
-    return { won, lost, push, decided, winRate, cumul: Number(cumul.toFixed(2)), series, avgEdge, total: bets.length, categories, verdicts, fdrPatterns, volatilites, decisionMatrix, venueContexts, terrainImpact, decisionMatrixVenue, decisionMatrixByContext, byRuleUsed, lostPostMortem };
+    // VUE HYPOTHÉTIQUE — répond à une question différente de decisionMatrixByContext :
+    // pas "l'effet terrain existe-t-il réellement" (ça, ça reste decisionMatrixByContext,
+    // qui ne compte QUE les matchs vraiment joués dans chaque contexte), mais "le pattern
+    // FDR reste-t-il un bon prédicteur si on ignore quel contexte a vraiment été joué".
+    // Ici, le MÊME résultat réel d'un match (won/lost) est compté sous CHACUN des 3
+    // patterns hypothétiques du snapshot (domicile/neutre/extérieur), comme si le même
+    // résultat s'était produit dans les 3 configurations. Ne mesure donc plus un effet
+    // terrain (toujours le même échantillon de matchs répété 3 fois), mais la robustesse
+    // du pattern lui-même — n'existe que pour les paris qui ont un venueSnapshot (donc
+    // pas pour d'anciens paris créés avant cette fonctionnalité)
+    const hypotheticalAcc = { domicile: {}, neutre: {}, exterieur: {} };
+    // même chose mais avec la volatilité en plus, pour avoir une vraie matrice de
+    // décision hypothétique (pas juste un total par pattern) — volatilité prise depuis
+    // v.volatiliteWorst (recalculée par contexte dans le snapshot, voir venueSnapshot
+    // dans FdrMatchSection : PPM/forme/volatilité dépendent tous du mélange domicile vs
+    // extérieur de chaque équipe) ; repli sur b.volatiliteWorst (celle du vrai match)
+    // seulement pour un snapshot créé avant l'ajout de ce champ
+    const hypotheticalVolAcc = { domicile: {}, neutre: {}, exterieur: {} };
+    resolved.forEach((b) => {
+      if (!b.venueSnapshot) return;
+      b.venueSnapshot.forEach((v) => {
+        if (!v.pattern) return;
+        const bucket = hypotheticalAcc[v.venueContext];
+        bucket[v.pattern] = bucket[v.pattern] || { won: 0, lost: 0, push: 0 };
+        bucket[v.pattern][b.result === "won" ? "won" : b.result === "lost" ? "lost" : "push"]++;
+        // volatilité propre à ce contexte hypothétique (recalculée dans le snapshot) —
+        // si absente (snapshot créé avant l'ajout de ce champ), on retombe sur celle du
+        // vrai match plutôt que de perdre la ligne
+        const vol = v.volatiliteWorst || b.volatiliteWorst;
+        if (vol) {
+          const volBucket = hypotheticalVolAcc[v.venueContext];
+          volBucket[v.pattern] = volBucket[v.pattern] || {};
+          volBucket[v.pattern][vol] = volBucket[v.pattern][vol] || { won: 0, lost: 0, push: 0 };
+          volBucket[v.pattern][vol][b.result === "won" ? "won" : b.result === "lost" ? "lost" : "push"]++;
+        }
+      });
+    });
+    const buildHypotheticalRows = (acc) =>
+      matrixRowOrder
+        .filter((p) => acc[p])
+        .map((p) => {
+          const c = acc[p];
+          const dec = c.won + c.lost;
+          return { pattern: p, label: fdrPatternLabels[p] || p, won: c.won, lost: c.lost, decided: dec, winRate: dec ? (c.won / dec) * 100 : null };
+        });
+    const buildHypotheticalMatrix = (volAcc) =>
+      matrixRowOrder
+        .filter((p) => volAcc[p])
+        .map((p) => ({
+          pattern: p,
+          label: fdrPatternLabels[p] || p,
+          cells: matrixColOrder.map((vol) => {
+            const c = volAcc[p][vol];
+            if (!c) return { vol, won: 0, lost: 0, push: 0, decided: 0, winRate: null };
+            const dec = c.won + c.lost;
+            return { vol, won: c.won, lost: c.lost, push: c.push, decided: dec, winRate: dec ? (c.won / dec) * 100 : null };
+          }),
+        }));
+    const decisionMatrixHypothetical = {
+      domicile: buildHypotheticalRows(hypotheticalAcc.domicile),
+      neutre: buildHypotheticalRows(hypotheticalAcc.neutre),
+      exterieur: buildHypotheticalRows(hypotheticalAcc.exterieur),
+    };
+    const decisionMatrixHypotheticalVol = {
+      domicile: buildHypotheticalMatrix(hypotheticalVolAcc.domicile),
+      neutre: buildHypotheticalMatrix(hypotheticalVolAcc.neutre),
+      exterieur: buildHypotheticalMatrix(hypotheticalVolAcc.exterieur),
+    };
+
+    return { won, lost, push, decided, winRate, cumul: Number(cumul.toFixed(2)), series, avgEdge, total: bets.length, categories, verdicts, fdrPatterns, volatilites, decisionMatrix, venueContexts, terrainImpact, decisionMatrixVenue, decisionMatrixByContext, decisionMatrixHypothetical, decisionMatrixHypotheticalVol, byRuleUsed, lostPostMortem };
   }, [bets]);
 
   const tabs = [
