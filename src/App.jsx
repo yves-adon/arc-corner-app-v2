@@ -4700,7 +4700,7 @@ function H2hSection({ h2h, setH2h, teamAName, teamBName, seasonProj, limitRecent
   );
 }
 
-function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, individuels, setIndividuels, h2h, setH2h, onAddBet, bets }) {
+function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, individuels, setIndividuels, h2h, setH2h, onAddBet, onReplaceBet, bets }) {
   // limite "N dernières confrontations" pour les calculs H2H (stats corners ET axe H2H de
   // la probabilité normalisée) — même principe que "limiter aux N derniers matchs" déjà
   // proposé par profil d'équipe : évite qu'un historique qui remonte à 2014 (effectifs très
@@ -5437,7 +5437,7 @@ function ComparateurTab({ teamA, setTeamA, teamB, setTeamB, lignes, setLignes, i
 
       <EloPanel teamAName={teamA.nom} teamBName={teamB.nom} />
 
-      <FdrMatchSection teamAName={teamA.nom} teamBName={teamB.nom} matchesA={matchesAFiltered} matchesB={matchesBFiltered} h2h={h2hEffective} onAddBet={onAddBet} bets={bets} />
+      <FdrMatchSection teamAName={teamA.nom} teamBName={teamB.nom} matchesA={matchesAFiltered} matchesB={matchesBFiltered} h2h={h2hEffective} onAddBet={onAddBet} onReplaceBet={onReplaceBet} bets={bets} />
 
       <SecondaryStatPanel
         label="Tirs"
@@ -5816,8 +5816,14 @@ function HistoriqueTab({ bets, setResult, removeBet, addManualBet, updateCote, u
   // trié par date à l'AFFICHAGE, jamais dépendant de l'ordre de stockage — une fusion
   // multi-appareils ne garantit aucun ordre particulier dans le tableau brut
   const sortedBets = useMemo(() => [...bets].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)), [bets]);
-  const missingCtx = useMemo(() => sortedBets.filter((b) => b.category === "fdr" && !b.venueContext), [sortedBets]);
-  const allMissingChecked = missingCtx.length > 0 && missingCtx.every((b) => checkedIds.has(b.id));
+  // TOUS les paris FDR, pas seulement ceux sans contexte — sinon la barre disparaît dès
+  // que tout est tagué et il devient impossible de corriger une erreur de masse (ex. un
+  // mauvais clic sur "Neutre" pour tout le lot) autrement qu'à la main pari par pari
+  const fdrBets = useMemo(() => sortedBets.filter((b) => b.category === "fdr"), [sortedBets]);
+  const missingCtx = useMemo(() => fdrBets.filter((b) => !b.venueContext), [fdrBets]);
+  const allChecked = fdrBets.length > 0 && fdrBets.every((b) => checkedIds.has(b.id));
+  const selectByCurrentContext = (venueContext) =>
+    setCheckedIds(new Set(fdrBets.filter((b) => (venueContext === null ? !b.venueContext : b.venueContext === venueContext)).map((b) => b.id)));
   const applyBulk = (venueContext) => {
     if (!updateVenueContextBulk || checkedIds.size === 0) return;
     updateVenueContextBulk([...checkedIds], venueContext);
@@ -5827,23 +5833,33 @@ function HistoriqueTab({ bets, setResult, removeBet, addManualBet, updateCote, u
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <QuickAddForm onAdd={addManualBet} />
       {!bets.length && <EmptyState title="Aucun pari suivi" text="Ajoute un pari terminé ci-dessus, ou utilise le bouton « Suivre » depuis l'onglet Comparateur." />}
-      {missingCtx.length > 0 && updateVenueContextBulk && (
+      {fdrBets.length > 0 && updateVenueContextBulk && (
         <div style={{ background: C.surface, border: `1px solid ${C.jouable}55`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
           <div style={{ fontSize: 11.5, color: C.text, fontWeight: 700 }}>
-            {missingCtx.length} pari(s) FDR sans contexte terrain
+            Contexte terrain — {missingCtx.length > 0 ? `${missingCtx.length} pari(s) encore sans contexte` : "tous les paris sont tagués"}
           </div>
           <div style={{ fontSize: 9.5, color: C.faint }}>
-            coche les paris concernés (ou tout sélectionner), puis applique un contexte en un clic — corrige ensuite les exceptions individuellement ci-dessous
+            sélectionne un lot (case à cocher sur chaque pari, ou les raccourcis ci-dessous), puis applique un contexte en un clic — réutilisable aussi pour corriger un mauvais tag déjà posé
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: C.text, cursor: "pointer" }}>
-              <input
-                type="checkbox"
-                checked={allMissingChecked}
-                onChange={() => setCheckedIds(allMissingChecked ? new Set() : new Set(missingCtx.map((b) => b.id)))}
-              />
-              tout sélectionner ({checkedIds.size}/{missingCtx.length})
+              <input type="checkbox" checked={allChecked} onChange={() => setCheckedIds(allChecked ? new Set() : new Set(fdrBets.map((b) => b.id)))} />
+              tout sélectionner ({checkedIds.size}/{fdrBets.length})
             </label>
+            {missingCtx.length > 0 && (
+              <button onClick={() => selectByCurrentContext(null)} style={{ fontSize: 10, padding: "3px 7px", borderRadius: 6, border: `1px solid ${C.line}`, background: "transparent", color: C.faint, cursor: "pointer" }}>
+                sélectionner « sans contexte »
+              </button>
+            )}
+            {Object.entries(FDR_VENUE_CONTEXT_META).map(([id, meta]) => (
+              <button
+                key={id}
+                onClick={() => selectByCurrentContext(id)}
+                style={{ fontSize: 10, padding: "3px 7px", borderRadius: 6, border: `1px solid ${C.line}`, background: "transparent", color: C.faint, cursor: "pointer" }}
+              >
+                sélectionner les « {meta.label} » actuels
+              </button>
+            ))}
           </div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             {Object.entries(FDR_VENUE_CONTEXT_META).map(([id, meta]) => (
@@ -5898,7 +5914,7 @@ function HistoriqueTab({ bets, setResult, removeBet, addManualBet, updateCote, u
           </div>
           {b.category === "fdr" && updateVenueContext && (
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-              {!b.venueContext && updateVenueContextBulk && (
+              {updateVenueContextBulk && (
                 <input type="checkbox" checked={checkedIds.has(b.id)} onChange={() => toggleChecked(b.id)} style={{ marginRight: 2 }} />
               )}
               <span style={{ fontSize: 9.5, color: b.venueContext ? C.faint : C.jouable }}>
@@ -5923,6 +5939,42 @@ function HistoriqueTab({ bets, setResult, removeBet, addManualBet, updateCote, u
                 </button>
               ))}
             </div>
+          )}
+          {b.venueSnapshot && (
+            <Collapsible title="↔️ Comparer les 3 contextes terrain pour ce match" color={C.faint} defaultOpen={false}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {b.venueSnapshot.map((v) => {
+                  const meta = FDR_VENUE_CONTEXT_META[v.venueContext];
+                  const pMeta = v.pattern ? FDR_PATTERN_META[v.pattern] : null;
+                  return (
+                    <div
+                      key={v.venue}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        fontSize: 10.5,
+                        padding: "4px 6px",
+                        borderRadius: 6,
+                        background: v.venueContext === b.venueContext ? meta.color + "18" : "transparent",
+                        border: v.venueContext === b.venueContext ? `1px solid ${meta.color}55` : "1px solid transparent",
+                      }}
+                    >
+                      <span style={{ color: C.text }}>{meta.emoji} {meta.label}{v.venueContext === b.venueContext ? " (réel)" : ""}</span>
+                      <span style={{ color: C.dim, fontFamily: FONT_MONO }}>
+                        {v.scoreA !== null ? v.scoreA.toFixed(2) : "—"} / {v.scoreB !== null ? v.scoreB.toFixed(2) : "—"}
+                      </span>
+                      <span style={{ color: pMeta ? pMeta.color : C.faint, fontWeight: 700 }}>
+                        {pMeta ? `${pMeta.emoji} ${pMeta.label}` : "—"}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ fontSize: 9, color: C.faint, fontStyle: "italic", marginTop: 4 }}>
+                seul « (réel) » correspond à ce qui s'est vraiment joué — les 2 autres lignes sont hypothétiques (à titre de comparaison uniquement, ne comptent pas dans le Bilan)
+              </div>
+            </Collapsible>
           )}
           {b.detailA && b.detailB && (
             <Collapsible
@@ -6380,7 +6432,7 @@ function MatchTypeBadge({ rA, rB, inputsA, inputsB, bets }) {
   );
 }
 
-function StrategyConvergence({ teamAName, teamBName, proj, rA, rB, inputsA, inputsB, onAddBet, venue }) {
+function StrategyConvergence({ teamAName, teamBName, proj, rA, rB, inputsA, inputsB, onAddBet, onReplaceBet, bets, venue, venueSnapshot }) {
   const [tcFavori, setTcFavori] = useState(null); // "A" | "B" | null
   const [fsFavori, setFsFavori] = useState(null);
   const [tcOver, setTcOver] = useState(false);
@@ -6422,34 +6474,55 @@ function StrategyConvergence({ teamAName, teamBName, proj, rA, rB, inputsA, inpu
   const volatiliteWorst = volLabelA === "Forte" || volLabelB === "Forte" ? "Forte" : volLabelA === "Moyenne" || volLabelB === "Moyenne" ? "Moyenne" : "Faible";
   const bttsFreqAlert = (inputsA.formeN > 0 && inputsA.bttsOccurrences / inputsA.formeN < 0.66) || (inputsB.formeN > 0 && inputsB.bttsOccurrences / inputsB.formeN < 0.66);
 
+  // champs recalculés à chaque analyse — partagés entre "ajouter" (nouveau pari) et
+  // "remplacer" (réinjecte ces champs dans un pari existant sans toucher id/date/
+  // résultat/cote/mise)
+  const buildFdrPayload = () => ({
+    category: "fdr",
+    label: `${verdict.text} — ${teamAName || "A"} vs ${teamBName || "B"}`,
+    ruleUsed: rule1 ? "Règle 1 (BTTS)" : "Règle 2 (BTTS+Over)",
+    teamAName: teamAName || "A",
+    teamBName: teamBName || "B",
+    fdrBandA: rA.band.label,
+    fdrScoreA: Number(rA.score.toFixed(2)),
+    fdrBandB: rB.band.label,
+    fdrScoreB: Number(rB.score.toFixed(2)),
+    fdrPattern,
+    // contexte terrain figé à l'ajout, du point de vue de l'équipe A (même convention
+    // que venueForA dans FdrMatchSection) — permet de croiser plus tard le contexte FDR
+    // avec domicile/neutre/extérieur dans le Bilan, chose impossible pour les paris
+    // ajoutés avant ce champ (ils resteront simplement absents de ce nouveau tableau)
+    venueContext: venue === "A" ? "domicile" : venue === "B" ? "exterieur" : "neutre",
+    // les 3 variantes (domicile/neutre/extérieur) calculées pour CE match précis au
+    // moment de l'ajout — permet de comparer les codes couleur entre contextes dans
+    // l'Historique sans dépendre du panneau FDR encore ouvert
+    venueSnapshot: venueSnapshot || null,
+    volatiliteWorst,
+    bttsFreqAlert,
+    // détail par équipe (pas juste "la pire des deux") — pour pouvoir, plus tard,
+    // examiner les paris perdus cas par cas et voir si un point commun se dégage (ex.
+    // toujours l'équipe à l'attaque volatile qui déçoit, plutôt que la défense)
+    detailA: { attaque: Number(inputsA.attaque.toFixed(2)), defense: Number(inputsA.defense.toFixed(2)), volAttaque: volatiliteButsLabel(inputsA.volatiliteAttaque).label, volDefense: volatiliteButsLabel(inputsA.volatiliteDefense).label },
+    detailB: { attaque: Number(inputsB.attaque.toFixed(2)), defense: Number(inputsB.defense.toFixed(2)), volAttaque: volatiliteButsLabel(inputsB.volatiliteAttaque).label, volDefense: volatiliteButsLabel(inputsB.volatiliteDefense).label },
+  });
+
   const handleAdd = () => {
     if (!verdict || !onAddBet) return;
-    onAddBet({
-      category: "fdr",
-      label: `${verdict.text} — ${teamAName || "A"} vs ${teamBName || "B"}`,
-      cote: "",
-      ruleUsed: rule1 ? "Règle 1 (BTTS)" : "Règle 2 (BTTS+Over)",
-      teamAName: teamAName || "A",
-      teamBName: teamBName || "B",
-      fdrBandA: rA.band.label,
-      fdrScoreA: Number(rA.score.toFixed(2)),
-      fdrBandB: rB.band.label,
-      fdrScoreB: Number(rB.score.toFixed(2)),
-      fdrPattern,
-      // contexte terrain figé à l'ajout, du point de vue de l'équipe A (même convention
-      // que venueForA dans FdrMatchSection) — permet de croiser plus tard le contexte FDR
-      // avec domicile/neutre/extérieur dans le Bilan, chose impossible pour les paris
-      // ajoutés avant ce champ (ils resteront simplement absents de ce nouveau tableau)
-      venueContext: venue === "A" ? "domicile" : venue === "B" ? "exterieur" : "neutre",
-      volatiliteWorst,
-      bttsFreqAlert,
-      // détail par équipe (pas juste "la pire des deux") — pour pouvoir, plus tard,
-      // examiner les paris perdus cas par cas et voir si un point commun se dégage (ex.
-      // toujours l'équipe à l'attaque volatile qui déçoit, plutôt que la défense)
-      detailA: { attaque: Number(inputsA.attaque.toFixed(2)), defense: Number(inputsA.defense.toFixed(2)), volAttaque: volatiliteButsLabel(inputsA.volatiliteAttaque).label, volDefense: volatiliteButsLabel(inputsA.volatiliteDefense).label },
-      detailB: { attaque: Number(inputsB.attaque.toFixed(2)), defense: Number(inputsB.defense.toFixed(2)), volAttaque: volatiliteButsLabel(inputsB.volatiliteAttaque).label, volDefense: volatiliteButsLabel(inputsB.volatiliteDefense).label },
-    });
+    onAddBet({ ...buildFdrPayload(), cote: "" });
     setAdded(true);
+  };
+
+  // paris FDR déjà suivis pour EXACTEMENT ce même duel (même sens A/B) — candidats pour
+  // le remplacement après réanalyse ; le plus récent en premier
+  const replaceCandidates = (bets || [])
+    .filter((b) => b.category === "fdr" && b.teamAName === (teamAName || "A") && b.teamBName === (teamBName || "B"))
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  const [replaceTargetId, setReplaceTargetId] = useState("");
+  const [replaced, setReplaced] = useState(false);
+  const handleReplace = () => {
+    if (!verdict || !onReplaceBet || !replaceTargetId) return;
+    onReplaceBet(replaceTargetId, buildFdrPayload());
+    setReplaced(true);
   };
 
   const FavoriToggle = ({ label, value, onChange }) => (
@@ -6518,6 +6591,42 @@ function StrategyConvergence({ teamAName, teamBName, proj, rA, rB, inputsA, inpu
               {added ? "✓ ajouté au bilan" : "+ Ajouter au bilan (avec contexte FDR)"}
             </button>
           )}
+          {onReplaceBet && replaceCandidates.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "8px 10px", borderRadius: 8, border: `1px dashed ${C.line}` }}>
+              <span style={{ fontSize: 9.5, color: C.faint }}>
+                réanalyse d'un match déjà suivi — remplace scores/pattern/contexte d'un pari existant sans toucher à son résultat, sa cote ou sa mise
+              </span>
+              <select
+                value={replaceTargetId}
+                onChange={(e) => { setReplaceTargetId(e.target.value); setReplaced(false); }}
+                style={{ fontSize: 11, padding: "5px 7px", borderRadius: 6, border: `1px solid ${C.line}`, background: C.bg, color: C.text }}
+              >
+                <option value="">— choisir le pari à remplacer —</option>
+                {replaceCandidates.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {new Date(b.createdAt).toLocaleDateString("fr-FR")} · {b.fdrScoreA ?? "?"} / {b.fdrScoreB ?? "?"} · {b.result === "pending" ? "en attente" : b.result === "won" ? "gagné" : b.result === "lost" ? "perdu" : "push"}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={handleReplace}
+                disabled={!replaceTargetId || replaced}
+                style={{
+                  alignSelf: "flex-start",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  padding: "6px 10px",
+                  borderRadius: 6,
+                  border: `1px solid ${!replaceTargetId || replaced ? C.line : C.jouable + "88"}`,
+                  background: !replaceTargetId || replaced ? "transparent" : C.jouable + "22",
+                  color: !replaceTargetId || replaced ? C.faint : C.jouable,
+                  cursor: !replaceTargetId || replaced ? "default" : "pointer",
+                }}
+              >
+                {replaced ? "✓ remplacé" : "🔁 Remplacer ce pari"}
+              </button>
+            </div>
+          )}
         </div>
       ) : vigilance ? (
         <div style={{ padding: "10px 12px", borderRadius: 8, background: C.fragile + "18", border: `1px solid ${C.fragile}55`, fontSize: 11.5, color: C.fragile }}>
@@ -6555,7 +6664,7 @@ function VolBadgeTrio({ vTotal, vAttaque, vDefense }) {
   );
 }
 
-function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h, onAddBet, bets }) {
+function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h, onAddBet, onReplaceBet, bets }) {
   const [formeWindow, setFormeWindow] = useState(5);
   const [venue, setVenue] = useState("A"); // "A" = A à domicile, "N" = neutre, "B" = B à domicile
 
@@ -6574,6 +6683,30 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h, onAddB
 
   const rA = inputsB ? computeFDR({ ppm: inputsB.ppm, forme: inputsB.formePoints, formeWindow, venueId: venueForA, h2hScore: h2hA.score }) : null;
   const rB = inputsA ? computeFDR({ ppm: inputsA.ppm, forme: inputsA.formePoints, formeWindow, venueId: venueForB, h2hScore: h2hB.score }) : null;
+
+  // snapshot des 3 contextes terrain (A domicile / neutre / B domicile), figé au moment
+  // où le pari est ajouté au Bilan — répond à "voir aussi le code couleur pour les
+  // autres contextes" pour CE match précis, sans dépendre du toggle affiché à l'écran.
+  // Attention : PPM/forme dépendent eux-mêmes du contexte (profil domicile vs extérieur
+  // de chaque équipe, voir computeTeamFDRInputs), donc les 3 variantes ne sont pas un
+  // simple recalcul du score avec une note terrain différente — les stats d'entrée
+  // changent aussi. Ceci ne peut être fait qu'au moment de l'analyse (ici) : impossible
+  // de le reconstituer plus tard pour un pari déjà enregistré sans ce snapshot.
+  const venueSnapshot = ["A", "N", "B"].map((v) => {
+    const vForA = v === "A" ? "D" : v === "B" ? "E" : "N";
+    const vForB = v === "B" ? "D" : v === "A" ? "E" : "N";
+    const iA = computeTeamFDRInputs(matchesA, formeWindow, vForA);
+    const iB = computeTeamFDRInputs(matchesB, formeWindow, vForB);
+    const resA = iB ? computeFDR({ ppm: iB.ppm, forme: iB.formePoints, formeWindow, venueId: vForA, h2hScore: h2hA.score }) : null;
+    const resB = iA ? computeFDR({ ppm: iA.ppm, forme: iA.formePoints, formeWindow, venueId: vForB, h2hScore: h2hB.score }) : null;
+    return {
+      venue: v,
+      venueContext: v === "A" ? "domicile" : v === "B" ? "exterieur" : "neutre",
+      scoreA: resA ? resA.score : null,
+      scoreB: resB ? resB.score : null,
+      pattern: resA && resB ? classifyFdrPattern(resA.score, resB.score) : null,
+    };
+  });
 
   const Card = ({ name, color, r, missing, oppInputs }) => (
     <div style={{ flex: 1, background: C.bg, border: `1px solid ${C.line}`, borderRadius: 10, padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
@@ -6865,7 +6998,7 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h, onAddB
         })()}
 
         {inputsA && inputsB && (
-          <StrategyConvergence teamAName={teamAName} teamBName={teamBName} proj={computeGoalsProjection(inputsA, inputsB)} rA={rA} rB={rB} inputsA={inputsA} inputsB={inputsB} onAddBet={onAddBet} venue={venue} />
+          <StrategyConvergence teamAName={teamAName} teamBName={teamBName} proj={computeGoalsProjection(inputsA, inputsB)} rA={rA} rB={rB} inputsA={inputsA} inputsB={inputsB} onAddBet={onAddBet} onReplaceBet={onReplaceBet} bets={bets} venue={venue} venueSnapshot={venueSnapshot} />
         )}
 
         <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic" }}>
@@ -7396,6 +7529,11 @@ export default function App() {
   }, []);
 
   const addBet = (payload) => persist([{ id: uid(), createdAt: new Date().toISOString(), stake: 1, result: "pending", ...payload }, ...bets]);
+  // remplace les champs RECALCULÉS d'un pari FDR déjà existant (scores, pattern,
+  // contexte, snapshot 3 contextes, détail attaque/défense) après une réanalyse dans le
+  // Comparateur — garde intacts id, date d'ajout, résultat (gagné/perdu), cote et mise,
+  // pour ne pas perdre le suivi déjà en place sur ce pari
+  const replaceBetFdr = (id, payload) => persist(bets.map((b) => (b.id === id ? { ...b, ...payload } : b)));
   const setResult = (id, result) => persist(bets.map((b) => (b.id === id ? { ...b, result } : b)));
   const removeBet = (id) => persist(bets.filter((b) => b.id !== id));
   const updateCote = (id, cote) => persist(bets.map((b) => (b.id === id ? { ...b, cote } : b)));
@@ -7825,7 +7963,7 @@ export default function App() {
             <Loader2 className="animate-spin" size={22} />
           </div>
         ) : tab === "comparateur" ? (
-          <ComparateurTab teamA={teamA} setTeamA={setTeamA} teamB={teamB} setTeamB={setTeamB} lignes={lignes} setLignes={setLignes} individuels={individuels} setIndividuels={setIndividuels} h2h={h2h} setH2h={setH2h} onAddBet={addBet} bets={bets} />
+          <ComparateurTab teamA={teamA} setTeamA={setTeamA} teamB={teamB} setTeamB={setTeamB} lignes={lignes} setLignes={setLignes} individuels={individuels} setIndividuels={setIndividuels} h2h={h2h} setH2h={setH2h} onAddBet={addBet} onReplaceBet={replaceBetFdr} bets={bets} />
         ) : tab === "historique" ? (
           <HistoriqueTab bets={bets} setResult={setResult} removeBet={removeBet} addManualBet={addBet} updateCote={updateCote} updateVenueContext={updateVenueContext} updateVenueContextBulk={updateVenueContextBulk} />
         ) : (
