@@ -7502,13 +7502,14 @@ function SyncPanel({ onClose }) {
   const [saved, setSaved] = useState(!!window.sync?.getCode());
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
-  const [wipeStep, setWipeStep] = useState(0); // 0 = bouton seul, 1 = confirmation à taper
+  const [wipeStep, setWipeStep] = useState(0); // 0 = boutons seuls, 1 = confirmation à taper
   const [wipeText, setWipeText] = useState("");
+  const [wipeLocalOnly, setWipeLocalOnly] = useState(false); // true = ce téléphone seulement, sans le serveur
 
   const runWipe = async () => {
     setBusy(true);
     setMsg(null);
-    const r = await window.sync.wipeAll();
+    const r = await window.sync.wipeAll({ localOnly: wipeLocalOnly });
     if (r.ok) {
       // rechargement immédiat : l'état React en mémoire (paris, brouillon...) ne doit pas
       // se réécrire par-dessus ce qui vient d'être effacé
@@ -7588,11 +7589,16 @@ function SyncPanel({ onClose }) {
           {wipeStep === 0 ? (
             <>
               <div style={{ fontSize: 10, color: C.faint }}>
-                Efface tout : historique et bilan, matchs sauvegardés, brouillon et moyennes de ligue{window.sync?.getCode() ? ", sur cet appareil ET sur le serveur (code de synchro)" : " sur cet appareil"}. Impossible à annuler.
+                Efface historique et bilan, matchs sauvegardés, brouillon et moyennes de ligue. Impossible à annuler.
               </div>
-              <button onClick={() => setWipeStep(1)} style={{ background: C.fragile + "18", border: `1px solid ${C.fragile}55`, borderRadius: 6, padding: "7px", color: C.fragile, fontWeight: 700, fontSize: 11.5, cursor: "pointer" }}>
-                🗑️ Tout effacer…
+              <button onClick={() => { setWipeLocalOnly(true); setWipeStep(1); }} style={{ background: C.fragile + "18", border: `1px solid ${C.fragile}55`, borderRadius: 6, padding: "7px", color: C.fragile, fontWeight: 700, fontSize: 11.5, cursor: "pointer" }}>
+                📱 Effacer seulement sur cet appareil…
               </button>
+              {window.sync?.getCode() && (
+                <button onClick={() => { setWipeLocalOnly(false); setWipeStep(1); }} style={{ background: "transparent", border: `1px solid ${C.fragile}55`, borderRadius: 6, padding: "7px", color: C.fragile, fontWeight: 700, fontSize: 11.5, cursor: "pointer" }}>
+                  🗑️ Tout effacer, serveur compris…
+                </button>
+              )}
             </>
           ) : (
             <>
