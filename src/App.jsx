@@ -6176,6 +6176,37 @@ function computeTeamFDRInputs(matches, formeWindow = 5, venue = null) {
       volatiliteDefense = wavg(bsVenue.volatiliteConcedes, bsVenue.n, bsOther.volatiliteConcedes, bsOther.n);
       venueWeight = (venueSampleN / (venueSampleN + otherMatches.length)) * 100;
     }
+  } else if (venue === "N") {
+    // Neutre a SON PROPRE calcul dédié — avant, ce cas tombait par défaut sur la
+    // moyenne brute de TOUTE la saison (domicile+extérieur mélangés sans distinction),
+    // ce qui gonfle artificiellement la volatilité mesurée : mélanger deux groupes aux
+    // moyennes différentes (une équipe ne marque presque jamais pareil à domicile et
+    // dehors) augmente mécaniquement la variance apparente par rapport à regarder
+    // chaque groupe séparément (effet de mélange statistique classique). Un terrain
+    // neutre n'étant ni l'un ni l'autre, on fait une moyenne 50/50 des DEUX profils
+    // (contrairement au wavg ci-dessus, volontairement PAS pondérée par la taille de
+    // l'échantillon — un match neutre n'a pas de raison de pencher vers celui des deux
+    // contextes qui a le plus de matchs saisis)
+    const domMatches = sanitizedMatches.filter((m) => m.lieu === "D");
+    const extMatches = sanitizedMatches.filter((m) => m.lieu === "E");
+    venueSampleN = domMatches.length + extMatches.length;
+    if (domMatches.length >= 1 && extMatches.length >= 1) {
+      const vndDom = computeVND(domMatches, "butsObtenus", "butsConcedes");
+      const vndExt = computeVND(extMatches, "butsObtenus", "butsConcedes");
+      const bsDom = computeStatSeries(domMatches, "butsObtenus", "butsConcedes", 0.25);
+      const bsExt = computeStatSeries(extMatches, "butsObtenus", "butsConcedes", 0.25);
+      const avg2 = (a, b) => (a + b) / 2;
+      ppm = avg2(ppgFromVnd(vndDom), ppgFromVnd(vndExt));
+      attaque = avg2(bsDom.moyObtenus, bsExt.moyObtenus);
+      defense = avg2(bsDom.moyConcedes, bsExt.moyConcedes);
+      volatilite = avg2(bsDom.volatilite, bsExt.volatilite);
+      volatiliteAttaque = avg2(bsDom.volatiliteObtenus, bsExt.volatiliteObtenus);
+      volatiliteDefense = avg2(bsDom.volatiliteConcedes, bsExt.volatiliteConcedes);
+      venueWeight = 50; // toujours 50/50 par construction, jamais penché vers un des 2 côtés
+    }
+    // si un des deux profils (domicile ou extérieur) est totalement absent, on garde le
+    // repli sur la moyenne brute de toute la saison (valeurs déjà initialisées plus
+    // haut) — impossible de faire un 50/50 avec un seul profil disponible
   }
 
   return { ppm, n: sanitizedMatches.length, formePoints, formeN, formeWindow, attaque, defense, volatilite, volatiliteAttaque, volatiliteDefense, venueSampleN, venueWeight, venue, bttsOccurrences, overOccurrences, cleanSheetOrBlank, suspiciousMatches };
@@ -6693,13 +6724,11 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h, onAddB
   // snapshot des 3 contextes terrain (A domicile / neutre / B domicile), figé au moment
   // où le pari est ajouté au Bilan — répond à "voir aussi le code couleur pour les
   // autres contextes" pour CE match précis, sans dépendre du toggle affiché à l'écran.
-  // Attention : PPM/forme/volatilité dépendent eux-mêmes du contexte (profil domicile vs
-  // extérieur de chaque équipe, voir computeTeamFDRInputs — le mélange pondéré par lieu
-  // s'applique aussi à volatilite/volatiliteAttaque/volatiliteDefense, pas seulement à
-  // ppm/forme), donc les 3 variantes ne sont pas un simple recalcul du score avec une
-  // note terrain différente — les stats d'entrée changent aussi, volatilité comprise.
-  // Ceci ne peut être fait qu'au moment de l'analyse (ici) : impossible de le
-  // reconstituer plus tard pour un pari déjà enregistré sans ce snapshot.
+  // Attention : PPM/forme dépendent eux-mêmes du contexte (profil domicile vs extérieur
+  // de chaque équipe, voir computeTeamFDRInputs), donc les 3 variantes ne sont pas un
+  // simple recalcul du score avec une note terrain différente — les stats d'entrée
+  // changent aussi. Ceci ne peut être fait qu'au moment de l'analyse (ici) : impossible
+  // de le reconstituer plus tard pour un pari déjà enregistré sans ce snapshot.
   const venueSnapshot = ["A", "N", "B"].map((v) => {
     const vForA = v === "A" ? "D" : v === "B" ? "E" : "N";
     const vForB = v === "B" ? "D" : v === "A" ? "E" : "N";
@@ -6707,26 +6736,12 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h, onAddB
     const iB = computeTeamFDRInputs(matchesB, formeWindow, vForB);
     const resA = iB ? computeFDR({ ppm: iB.ppm, forme: iB.formePoints, formeWindow, venueId: vForA, h2hScore: h2hA.score }) : null;
     const resB = iA ? computeFDR({ ppm: iA.ppm, forme: iA.formePoints, formeWindow, venueId: vForB, h2hScore: h2hB.score }) : null;
-    // volatilité propre à CE contexte hypothétique (pas réutilisée depuis le vrai match)
-    // — même logique que volatiliteWorst plus bas dans handleAdd, mais avec iA/iB
-    // recalculés pour ce lieu précis plutôt que les inputsA/inputsB du contexte réel
-    const volLabelA = iA ? volatiliteButsLabel(iA.volatilite).label : null;
-    const volLabelB = iB ? volatiliteButsLabel(iB.volatilite).label : null;
-    const volatiliteWorst =
-      volLabelA && volLabelB
-        ? volLabelA === "Forte" || volLabelB === "Forte"
-          ? "Forte"
-          : volLabelA === "Moyenne" || volLabelB === "Moyenne"
-          ? "Moyenne"
-          : "Faible"
-        : null;
     return {
       venue: v,
       venueContext: v === "A" ? "domicile" : v === "B" ? "exterieur" : "neutre",
       scoreA: resA ? resA.score : null,
       scoreB: resB ? resB.score : null,
       pattern: resA && resB ? classifyFdrPattern(resA.score, resB.score) : null,
-      volatiliteWorst,
     };
   });
 
@@ -6745,7 +6760,9 @@ function FdrMatchSection({ teamAName, teamBName, matchesA, matchesB, h2h, onAddB
             label="Niveau adversaire"
             sub={
               oppInputs?.venueWeight !== null && oppInputs?.venueWeight !== undefined
-                ? `mélange pondéré : ${oppInputs.venueWeight.toFixed(0)}% ${oppInputs.venue === "D" ? "domicile" : "extérieur"} (${oppInputs.venueSampleN} matchs) / ${(100 - oppInputs.venueWeight).toFixed(0)}% reste`
+                ? oppInputs.venue === "N"
+                  ? `mélange 50/50 domicile/extérieur (${oppInputs.venueSampleN} matchs au total)`
+                  : `mélange pondéré : ${oppInputs.venueWeight.toFixed(0)}% ${oppInputs.venue === "D" ? "domicile" : "extérieur"} (${oppInputs.venueSampleN} matchs) / ${(100 - oppInputs.venueWeight).toFixed(0)}% reste`
                 : "PPM global (pas de match dans ce lieu précis pour distinguer)"
             }
             weight={FDR_WEIGHTS.adversaire}
@@ -7370,7 +7387,7 @@ function BilanTab({ stats }) {
             </span>
           </div>
           <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic" }}>
-            même résultat réel d'un match compté sous ses 3 patterns hypothétiques (domicile/neutre/extérieur) — pas 3 vrais matchs, un seul répété 3 fois sous 3 étiquettes différentes
+            même résultat réel d'un match compté sous ses 3 patterns hypothétiques (domicile/neutre/extérieur) — pas 3 vrais matchs, un seul répété 3 fois sous 3 étiquettes différentes. Rappel : deux matchs différents peuvent tomber sur le même pattern hypothétique et se retrouver mélangés dans la même case (voir l'échange où un 0%/100% s'est retrouvé fusionné en 50%)
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             {["domicile", "neutre", "exterieur"].map((vc) => {
@@ -7419,7 +7436,7 @@ function BilanTab({ stats }) {
                         ))}
                       </div>
                       <div style={{ fontSize: 8.5, color: C.faint, fontStyle: "italic", marginTop: 3 }}>
-                        volatilité recalculée pour chaque contexte hypothétique (pas réutilisée depuis le vrai match)
+                        volatilité = celle du vrai match (réutilisée pour les 3 lignes, pas recalculée par contexte hypothétique)
                       </div>
                     </div>
                   )}
@@ -7974,11 +7991,11 @@ export default function App() {
     // pas pour d'anciens paris créés avant cette fonctionnalité)
     const hypotheticalAcc = { domicile: {}, neutre: {}, exterieur: {} };
     // même chose mais avec la volatilité en plus, pour avoir une vraie matrice de
-    // décision hypothétique (pas juste un total par pattern) — volatilité prise depuis
-    // v.volatiliteWorst (recalculée par contexte dans le snapshot, voir venueSnapshot
-    // dans FdrMatchSection : PPM/forme/volatilité dépendent tous du mélange domicile vs
-    // extérieur de chaque équipe) ; repli sur b.volatiliteWorst (celle du vrai match)
-    // seulement pour un snapshot créé avant l'ajout de ce champ
+    // décision hypothétique (pas juste un total par pattern) — NB : le snapshot ne garde
+    // que score/pattern par contexte hypothétique (pas de volatilité recalculée par
+    // contexte, retiré pour rester simple), donc ici on réutilise systématiquement la
+    // volatilité du vrai match (b.volatiliteWorst) pour les 3 lignes — approximation à
+    // garder en tête en lisant les cases
     const hypotheticalVolAcc = { domicile: {}, neutre: {}, exterieur: {} };
     resolved.forEach((b) => {
       if (!b.venueSnapshot) return;
@@ -7987,15 +8004,11 @@ export default function App() {
         const bucket = hypotheticalAcc[v.venueContext];
         bucket[v.pattern] = bucket[v.pattern] || { won: 0, lost: 0, push: 0 };
         bucket[v.pattern][b.result === "won" ? "won" : b.result === "lost" ? "lost" : "push"]++;
-        // volatilité propre à ce contexte hypothétique (recalculée dans le snapshot) —
-        // si absente (snapshot créé avant l'ajout de ce champ), on retombe sur celle du
-        // vrai match plutôt que de perdre la ligne
-        const vol = v.volatiliteWorst || b.volatiliteWorst;
-        if (vol) {
+        if (b.volatiliteWorst) {
           const volBucket = hypotheticalVolAcc[v.venueContext];
           volBucket[v.pattern] = volBucket[v.pattern] || {};
-          volBucket[v.pattern][vol] = volBucket[v.pattern][vol] || { won: 0, lost: 0, push: 0 };
-          volBucket[v.pattern][vol][b.result === "won" ? "won" : b.result === "lost" ? "lost" : "push"]++;
+          volBucket[v.pattern][b.volatiliteWorst] = volBucket[v.pattern][b.volatiliteWorst] || { won: 0, lost: 0, push: 0 };
+          volBucket[v.pattern][b.volatiliteWorst][b.result === "won" ? "won" : b.result === "lost" ? "lost" : "push"]++;
         }
       });
     });
