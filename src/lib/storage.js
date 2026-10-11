@@ -196,6 +196,40 @@ window.sync = {
     return { ok: true, sent };
   },
 
+  /* Efface TOUTES les données de l'app (paris, matchs sauvegardés, brouillon, moyennes de
+     ligue) — en local ET, si un code de synchro est actif, sur le serveur.
+     Le serveur passe en premier et est vérifié après coup : pushAll/pullAll fusionnent
+     par id sans jamais rien écraser, donc des données restées sur le serveur
+     ressusciteraient à la prochaine synchro. Si le serveur échoue (réseau, refus), on
+     n'efface RIEN en local et on le dit, pour ne pas laisser un état à moitié nettoyé.
+     Le code de synchro lui-même est conservé (clé distincte, hors préfixe des données). */
+  async wipeAll() {
+    const code = getSyncCode();
+    if (code) {
+      const codeFilter = `code=eq.${encodeURIComponent(code)}`;
+      try {
+        const res = await fetch(`${REST_URL}?${codeFilter}`, { method: "DELETE", headers: REST_HEADERS });
+        if (!res.ok) return { ok: false, error: `Le serveur a refusé la suppression (erreur ${res.status}). Rien n'a été effacé, réessaie.` };
+        // un DELETE bloqué par les règles du serveur peut répondre "ok" sans rien supprimer :
+        // on revérifie ce qu'il reste réellement
+        const chk = await fetch(`${REST_URL}?${codeFilter}&select=key`, { headers: REST_HEADERS });
+        if (chk.ok) {
+          const rows = await chk.json();
+          if (rows.length) return { ok: false, error: `Le serveur a gardé ${rows.length} élément(s) malgré la demande. Rien n'a été effacé en local, réessaie.` };
+        }
+      } catch (e) {
+        return { ok: false, error: "Impossible de contacter le serveur de synchro. Rien n'a été effacé, réessaie avec du réseau." };
+      }
+    }
+    try {
+      const keys = safeParseKeys("");
+      keys.forEach((k) => localStorage.removeItem(PREFIX + k));
+      return { ok: true, local: keys.length, server: !!code };
+    } catch (e) {
+      return { ok: false, error: "Impossible d'effacer les données locales de ce navigateur." };
+    }
+  },
+
   /* Nouvel appareil AVEC des données locales à préserver : fusionne au lieu d'écraser.
      Pour les deux listes qui comptent vraiment (matchs sauvegardés, historique de
      paris), chaque entrée a un "id" unique — on garde toutes les entrées des DEUX
