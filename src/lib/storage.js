@@ -203,8 +203,12 @@ window.sync = {
      ressusciteraient à la prochaine synchro. Si le serveur échoue (réseau, refus), on
      n'efface RIEN en local et on le dit, pour ne pas laisser un état à moitié nettoyé.
      Le code de synchro lui-même est conservé (clé distincte, hors préfixe des données). */
-  async wipeAll() {
-    const code = getSyncCode();
+  async wipeAll({ localOnly = false } = {}) {
+    // localOnly : efface uniquement ce navigateur, sans toucher au serveur (utile quand
+    // le serveur ne répond pas, ou pour garder la copie serveur). Le code de synchro
+    // reste en place ; la copie serveur n'est remplacée que lorsque de nouvelles données
+    // sont enregistrées ici (chaque sauvegarde réécrit sa clé sur le serveur).
+    const code = localOnly ? null : getSyncCode();
     if (code) {
       const codeFilter = `code=eq.${encodeURIComponent(code)}`;
       try {
