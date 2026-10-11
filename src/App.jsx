@@ -7502,6 +7502,22 @@ function SyncPanel({ onClose }) {
   const [saved, setSaved] = useState(!!window.sync?.getCode());
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [wipeStep, setWipeStep] = useState(0); // 0 = bouton seul, 1 = confirmation à taper
+  const [wipeText, setWipeText] = useState("");
+
+  const runWipe = async () => {
+    setBusy(true);
+    setMsg(null);
+    const r = await window.sync.wipeAll();
+    if (r.ok) {
+      // rechargement immédiat : l'état React en mémoire (paris, brouillon...) ne doit pas
+      // se réécrire par-dessus ce qui vient d'être effacé
+      window.location.reload();
+      return;
+    }
+    setMsg({ type: "err", text: r.error || "Échec de l'effacement." });
+    setBusy(false);
+  };
 
   const activate = () => {
     if (!code.trim()) return;
@@ -7567,6 +7583,36 @@ function SyncPanel({ onClose }) {
           </>
         )}
         {msg && <div style={{ fontSize: 11, color: msg.type === "ok" ? C.solide : C.fragile }}>{msg.text}</div>}
+        <div style={{ background: C.bg, border: `1px solid ${C.fragile}55`, borderRadius: 8, padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ fontSize: 11.5, fontWeight: 700, color: C.fragile }}>Zone dangereuse</div>
+          {wipeStep === 0 ? (
+            <>
+              <div style={{ fontSize: 10, color: C.faint }}>
+                Efface tout : historique et bilan, matchs sauvegardés, brouillon et moyennes de ligue{window.sync?.getCode() ? ", sur cet appareil ET sur le serveur (code de synchro)" : " sur cet appareil"}. Impossible à annuler.
+              </div>
+              <button onClick={() => setWipeStep(1)} style={{ background: C.fragile + "18", border: `1px solid ${C.fragile}55`, borderRadius: 6, padding: "7px", color: C.fragile, fontWeight: 700, fontSize: 11.5, cursor: "pointer" }}>
+                🗑️ Tout effacer…
+              </button>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 10, color: C.text }}>Pour confirmer, tape <b>EFFACER</b> ci-dessous :</div>
+              <TextInput value={wipeText} onChange={setWipeText} placeholder="EFFACER" />
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={() => { setWipeStep(0); setWipeText(""); }} disabled={busy} style={{ flex: 1, background: "transparent", border: `1px solid ${C.line}`, borderRadius: 6, padding: "7px", color: C.faint, fontWeight: 700, fontSize: 11.5, cursor: "pointer" }}>
+                  Annuler
+                </button>
+                <button
+                  onClick={runWipe}
+                  disabled={busy || wipeText.trim().toUpperCase() !== "EFFACER"}
+                  style={{ flex: 1, background: C.fragile + "28", border: `1px solid ${C.fragile}88`, borderRadius: 6, padding: "7px", color: C.fragile, fontWeight: 700, fontSize: 11.5, cursor: busy || wipeText.trim().toUpperCase() !== "EFFACER" ? "default" : "pointer", opacity: wipeText.trim().toUpperCase() !== "EFFACER" ? 0.5 : 1 }}
+                >
+                  {busy ? "…" : "Effacer définitivement"}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
         <div style={{ fontSize: 9.5, color: C.faint, fontStyle: "italic" }}>
           Après activation, chaque sauvegarde se synchronise automatiquement en arrière-plan sur cet appareil — pas besoin de revenir ici, sauf pour le premier envoi ou un nouvel appareil.
         </div>
